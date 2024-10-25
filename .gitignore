@@ -1,1 +1,9 @@
 dataset/
+.vscode/
+__pycache__/
+.venv/
+*.pyc
+cache/
+data/
+build/
+.DS_Store

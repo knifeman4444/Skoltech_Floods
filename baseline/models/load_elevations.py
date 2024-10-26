@@ -1,5 +1,6 @@
 import rasterio
 import elevation
+import numpy as np
 from rasterio.enums import Resampling
 import os
 import argparse
@@ -11,6 +12,51 @@ Requires "elevation" package to be installed
 It, in turn, requires "gdal" to be installed on the system
 Instructions for macOS: https://mits003.github.io/studio_null/2021/07/install-gdal-on-macos/
 """
+
+def load_and_add_elevation_data(reference_image_path: str) -> np.ndarray:
+    """
+    Load reference image and add elevation data to it.
+    
+    Parameters:
+        reference_image_path (str): Path to the reference image.
+    Returns:
+        np.ndarray: Image with elevation data added.
+    """
+    
+    with rasterio.open(reference_image_path) as src_image:
+        bounds = src_image.bounds
+        
+        src_image_data = src_image.read(indexes=1)
+        
+        # Download elevation data to a temporary file
+        seed = np.random.randint(0, 1000)
+        elevation.clip(bounds, output=f'/tmp/.elevation{seed}.tif')
+        
+        # Resample to needed resolution
+        with rasterio.open(f'/tmp/.elevation{seed}.tif') as src_elevation:
+            elevation_resampled = src_elevation.read(
+                out_shape=(1, src_image_data.shape[0], src_image_data.shape[1]),
+                resampling=Resampling.bilinear
+            )
+            
+        elevation_resampled = elevation_resampled.astype(src_image_data.dtype)
+        elevation_resampled = elevation_resampled[0]
+            
+        profile = src_image.profile
+        profile.update(count=src_image.count+1)
+        
+        # Save
+        with rasterio.open(f'/tmp/.elevation{seed}.tif', 'w', **profile) as dst:
+            for i in range(src_image.count):
+                dst.write(src_image.read(indexes=i+1), i+1)
+            dst.write(elevation_resampled, src_image.count+1)
+            
+        # Read the result
+        with rasterio.open(f'/tmp/.elevation{seed}.tif') as src:
+            return src.read()
+        
+        # Remove temporary file
+        os.remove(f'/tmp/.elevation{seed}.tif')
         
 def add_elevation_data(image_path: str, output_path: str):
     """
@@ -25,38 +71,18 @@ def add_elevation_data(image_path: str, output_path: str):
     """
     
     with rasterio.open(image_path) as src_image:
-        bounds = src_image.bounds
-        
-        # Check that image has exactly 10 channels
         if src_image.count != 10:
             raise ValueError("Image to add elevation data should have exactly 10 channels")
         
-        src_image_data = src_image.read(indexes=1)
+        image_with_elevation = load_and_add_elevation_data(image_path)
         
-        # Download elevation data to a temporary file
-        elevation.clip(bounds, output='/tmp/.elevation.tif')
-        
-        # Resample to needed resolution
-        with rasterio.open('/tmp/.elevation.tif') as src_elevation:
-            elevation_resampled = src_elevation.read(
-                out_shape=(1, src_image_data.shape[0], src_image_data.shape[1]),
-                resampling=Resampling.bilinear
-            )
-            
-        elevation_resampled = elevation_resampled.astype(src_image_data.dtype)
-        elevation_resampled = elevation_resampled[0]
-            
         profile = src_image.profile
         profile.update(count=11)
         
-        # Save
         with rasterio.open(output_path, 'w', **profile) as dst:
             for i in range(10):
                 dst.write(src_image.read(indexes=i+1), i+1)
-            dst.write(elevation_resampled, 11)
-            
-        # Remove temporary file
-        os.remove('/tmp/.elevation.tif')
+            dst.write(image_with_elevation[-1], 11)
 
 
 def process_images(input_dir: str, output_dir: str):

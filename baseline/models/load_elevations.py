@@ -5,6 +5,8 @@ from rasterio.enums import Resampling
 import os
 import argparse
 import glob
+import osmnx as ox
+from rasterio.features import rasterize
 
 """
 Requires "elevation" package to be installed
@@ -57,6 +59,40 @@ def load_and_add_elevation_data(reference_image_path: str) -> np.ndarray:
         
         # Remove temporary file
         os.remove(f'/tmp/.elevation{seed}.tif')
+        
+def load_and_add_osm_data(reference_image_path: str) -> np.ndarray:
+    """
+    Load reference image and add water bodies data from OSM to it.
+    
+    Parameters:
+        reference_image_path (str): Path to the reference image.
+    Returns:
+        np.ndarray: Image with water bodies data added.
+    """
+    
+    with rasterio.open(reference_image_path) as src_image:
+        bounds = src_image.bounds
+        src_image_data = src_image.read(indexes=1)
+        
+        # Get water bodies from OSM
+        tags = {'natural': ['water'], 'water': True}
+        water_bodies = ox.geometries_from_bbox(bounds.top, bounds.bottom, bounds.right, bounds.left, tags)
+        
+        # Rasterize water bodies
+        water_mask = rasterize(
+            [(geom, 1) for geom in water_bodies.geometry],
+            out_shape=(src_image_data.shape[0], src_image_data.shape[1]),
+            transform=src_image.transform,
+            all_touched=True,
+            fill=0,
+            default_value=1
+        )
+        
+        water_mask = water_mask.astype(np.float32)
+        
+        new_img = src_image.read()
+        new_img = np.append(new_img, [water_mask], axis=0)
+        return new_img
         
 def add_elevation_data(image_path: str, output_path: str):
     """

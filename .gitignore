@@ -7,3 +7,4 @@ cache/
 data/
 build/
 .DS_Store
+wandb_token.txt

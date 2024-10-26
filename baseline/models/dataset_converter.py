@@ -4,7 +4,7 @@ import os
 import rasterio
 import pathlib
 
-from load_elevations import load_and_add_elevation_data
+from models.load_elevations import load_and_add_elevation_data
 
 BANDS_S2 = ["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B8", "B8A", "B9", "B10", "B11", "B12"]
 OUR_BANDS = ["B2", "B3", "B4", "B5", "B6", "B7", "B8", "B8A", "B11", "B12"]
@@ -70,7 +70,7 @@ def load_from_folder(folder: str, split="test", filename=None, elevation=False) 
     else:
         # image = load_and_add_elevation_data(os.path.join(folder_S2, filename))
         raise NotImplementedError("Elevation data is not supported yet")
-    mask = rasterio.open(os.path.join(folder_gt, filename)).read()[1]
+    mask = rasterio.open(os.path.join(folder_gt, filename)).read()[1][np.newaxis, :, :]
     
     return image, mask
 
@@ -101,7 +101,7 @@ if __name__ == "__main__":
     
     fig, axs = plt.subplots(1, 2, figsize=(10, 5))
     axs[0].imshow((image[[2, 1, 0], :, :].transpose(1, 2, 0) / 3_500).clip(0, 1))
-    axs[1].imshow(mask[:, :])
+    axs[1].imshow(mask[0, :, :])
     plt.show()
     
     

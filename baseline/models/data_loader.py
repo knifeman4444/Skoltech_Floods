@@ -1,6 +1,6 @@
 import os
 import logging
-from typing import Dict, Literal, Tuple
+from typing import Dict, Literal, Tuple, List
 from time import time
 import numpy as np
 import pandas as pd
@@ -12,6 +12,7 @@ import random
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 from tqdm import tqdm
+from models.dataset_converter import is_tile_valid, load_from_folder, from_worldfloods
 
 from models.data_model import BatchDict
 from utils import bcolors
@@ -48,12 +49,24 @@ class CoverDataset(Dataset):
         data_split: Literal["train", "val"],
         tile_size: int = 256,
         channels: int = 10,
+        worldfloods_cnt: int = 0,
+        worldfloods_folder: str = "",
+        worldfloods_files: List[str] = None
     ) -> None:
         super().__init__()
         self.data_path = data_path
         self.data_split = data_split
         self.tile_size = tile_size
         self.channels = channels
+        self.worldfloods_cnt = worldfloods_cnt
+        self.worldfloods_folder = worldfloods_folder
+        self.worldfloods_files = worldfloods_files
+        
+        if worldfloods_cnt > 0 and not os.path.exists(worldfloods_folder):
+            raise FileNotFoundError(f"Folder {worldfloods_folder} does not exist")
+        if worldfloods_cnt > 0 and worldfloods_files is not None and len(worldfloods_files) != worldfloods_cnt:
+            raise ValueError(f"Mismatch in number of files: {len(worldfloods_files)} != {worldfloods_cnt}")
+        
         self._load_data()
 
     def __len__(self) -> int:
@@ -79,10 +92,22 @@ class CoverDataset(Dataset):
             file_names = ['1', '2', '4', '5', '6_1', '6_2']
         elif self.data_split == "val":
             file_names = ['6_1', '6_2', '9_1', '9_2']
+            
+        if self.worldfloods_cnt > 0 and self.data_split == "train":
+            if self.worldfloods_files is None:
+                self.worldfloods_files = random.sample(os.listdir(os.path.join(self.worldfloods_folder, "train", "S2")),
+                                                       self.worldfloods_cnt)
+            file_names += self.worldfloods_files
         
         pictures_and_masks = []
         logger.info(f'uploading {self.data_split} data...')
         for file_name in tqdm(file_names):
+            
+            if not file_name[0].isdigit():
+                image, mask = load_from_folder(self.worldfloods_folder, self.data_split, file_name)
+                pictures_and_masks.append((image.astype(np.float32), mask.astype(np.float32)))
+                continue
+            
             image_path = os.path.join(self.data_path, 'images', file_name + '.tif')
             mask_path = os.path.join(self.data_path, 'masks', file_name + '.tif')
             with rasterio.open(image_path) as fin:
@@ -108,21 +133,40 @@ class CoverDataset(Dataset):
         self.images = []
         self.masks = []
         tile_size = self.tile_size
+        
+        total_worldfloods_tiles = 0
         for image, mask in tqdm(pictures_and_masks):
             assert image.shape[1:] == mask.shape[1:], (image.shape, mask.shape)
-            _, h, w = image.shape
+            ch, h, w = image.shape
 
             for h_coord in range(0, h // tile_size):
                 for w_coord in range(0, w // tile_size):
                     y = h_coord * tile_size
                     x = w_coord * tile_size
-                    self.images.append(image[:, y: y + tile_size, x: x + tile_size])
-                    self.masks.append(mask[:, y: y + tile_size, x: x + tile_size])
+                    
+                    tile_mask = mask[:, y: y + tile_size, x: x + tile_size]
+                    tile_image = image[:, y: y + tile_size, x: x + tile_size]
+                    if ch > 11:
+                        # Image from worldfloods
+                        if not is_tile_valid(tile_mask):
+                            continue
+                        tile_image, tile_mask = from_worldfloods(tile_image, tile_mask)
+                        total_worldfloods_tiles += 1
+                    
+                    self.images.append(tile_image)
+                    self.masks.append(tile_mask)
+        
+        logger.info(f'Worldfloods tiles: {total_worldfloods_tiles}')
 
 
 def get_dataloader(config: Dict, data_split: str, batch_size: int) -> DataLoader:
     return DataLoader(
-        CoverDataset(config[data_split]['dataset_path'], data_split, config["train_params"]['tile_size']),
+        CoverDataset(
+            config[data_split]['dataset_path'], data_split,
+            config["train_params"]['tile_size'],
+            worldfloods_cnt=config.get("worldfloods_cnt", 0),
+            worldfloods_folder=config.get("worldfloods_folder", ""),
+            ),
         batch_size=batch_size,
         num_workers=config[data_split]["num_workers"],
         shuffle=config[data_split]["shuffle"],

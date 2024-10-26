@@ -7,6 +7,7 @@ import argparse
 import glob
 import osmnx as ox
 from rasterio.features import rasterize
+from rasterio.warp import transform_bounds
 
 """
 Requires "elevation" package to be installed
@@ -27,6 +28,11 @@ def load_and_add_elevation_data(reference_image_path: str) -> np.ndarray:
     
     with rasterio.open(reference_image_path) as src_image:
         bounds = src_image.bounds
+        
+        if src_image.crs != 'EPSG:4326':
+            bounds = rasterio.coords.BoundingBox(
+                *transform_bounds(src_image.crs, 'EPSG:4326', *bounds)
+            )
         
         src_image_data = src_image.read(indexes=1)
         
@@ -73,6 +79,11 @@ def load_and_add_osm_data(reference_image_path: str) -> np.ndarray:
     with rasterio.open(reference_image_path) as src_image:
         bounds = src_image.bounds
         src_image_data = src_image.read(indexes=1)
+        
+        if src_image.crs != 'EPSG:4326':
+            bounds = rasterio.coords.BoundingBox(
+                *transform_bounds(src_image.crs, 'EPSG:4326', *bounds)
+            )
         
         # Get water bodies from OSM
         tags = {'natural': ['water'], 'water': True}

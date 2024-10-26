@@ -9,3 +9,5 @@ build/
 .DS_Store
 wandb_token.txt
 local_config.yaml
+outputs_val/
+wandb/

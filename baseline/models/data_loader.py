@@ -80,7 +80,7 @@ class CoverDataset(Dataset):
         
         pictures_and_masks = []
         logger.info(f'uploading {self.data_split} data...')
-        for file_name in tqdm(file_names[:1]):
+        for file_name in tqdm(file_names):
             image_path = os.path.join(self.data_path, 'images', file_name + '.tif')
             mask_path = os.path.join(self.data_path, 'masks', file_name + '.tif')
             with rasterio.open(image_path) as fin:

@@ -100,7 +100,7 @@ class SegmentationDataset(Dataset):
         if self.worldfloods_cnt > 0 and self.data_split == "train":
             if self.worldfloods_files is None:
                 random.seed(42)
-                self.worldfloods_files = random.sample(os.listdir(os.path.join(self.worldfloods_folder, "test", "S2")),
+                self.worldfloods_files = random.sample(os.listdir(os.path.join(self.worldfloods_folder, self.data_split, "S2")),
                                                        self.worldfloods_cnt)
             file_names += self.worldfloods_files
         
@@ -109,7 +109,7 @@ class SegmentationDataset(Dataset):
         for file_name in tqdm(file_names):
             
             if not file_name[0].isdigit():
-                image, mask = load_from_folder(self.worldfloods_folder, 'test', file_name)
+                image, mask = load_from_folder(self.worldfloods_folder, self.data_split, file_name)
                 for i in range(image.shape[0]):
                     image[i] = normalize(image[i])
                 pictures_and_masks.append((image.astype(np.float32), mask.astype(np.float32)))

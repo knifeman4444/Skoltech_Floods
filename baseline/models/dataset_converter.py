@@ -41,8 +41,11 @@ def is_tile_valid(mask: np.ndarray) -> bool:
     n_pixels = mask.size
     n_clouds = np.sum(mask == 3)
     n_invalid = np.sum(mask == 0)
+    n_water = np.sum(mask == 2)
     
-    return n_clouds / n_pixels < max_clouds and n_invalid / n_pixels < max_invalid
+    return n_clouds / n_pixels < max_clouds and n_invalid / n_pixels < max_invalid and (
+        n_water / n_pixels >= 0.05 and n_water / n_pixels <= 0.95
+    )
 
 
 def load_from_folder(folder: str, split="test", filename=None, elevation=False) -> Tuple[np.ndarray, np.ndarray]:

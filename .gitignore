@@ -8,3 +8,4 @@ data/
 build/
 .DS_Store
 wandb_token.txt
+local_config.yaml

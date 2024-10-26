@@ -1,6 +1,7 @@
 import glob
 import json
 import os
+import shutil
 import re
 from typing import Dict, List, Tuple
 
@@ -10,46 +11,31 @@ import pandas as pd
 from sklearn.metrics import pairwise_distances
 from torch.utils.data import DataLoader
 
-from models.data_loader import cover_dataloader
+from models.data_loader import get_dataloader
 from models.data_model import Postfix
+
+from sklearn.metrics import f1_score
+
 
 def reduce_func(D_chunk, start):
     top_size = 100
     nearest_items = np.argsort(D_chunk, axis=1)[:, :top_size + 1]
     return [(i, items[items!=i]) for i, items in enumerate(nearest_items, start)]
 
-def dataloader_factory(config: Dict, data_split: str) -> List[DataLoader]:
-    return cover_dataloader(
-        data_path=config["data_path"],
-        file_ext=config["file_extension"],
-        #dataset_path=config[data_split]["dataset_path"],
-        data_split=data_split,
-        debug=config["debug"],
-        max_len=50,
-        **config[data_split]
-    )
+def calculate_metrics(y_true, y_pred) -> Dict[str, float]:
+    # Calculate intersection and union
+    intersection = np.sum((y_true == 1) & (y_pred == 1))
+    union = np.sum((y_true == 1) | (y_pred == 1))
+    epsilon=1e-7
 
-def calculate_ranking_metrics(embeddings: np.ndarray, cliques: List[int]) -> Tuple[np.ndarray, np.ndarray]:
-    distances = pairwise_distances(embeddings)
-    s_distances = np.argsort(distances, axis=1)
-    cliques = np.array(cliques)
-    query_cliques = cliques[s_distances[:, 0]]
-    search_cliques = cliques[s_distances[:, 1:]]
+    # Calculate IoU
+    iou = (intersection + epsilon) / (union + epsilon)
+    f1 = f1_score(y_true, y_pred, average='macro')
 
-    query_cliques = np.tile(query_cliques, (search_cliques.shape[-1], 1)).T
-    mask = np.equal(search_cliques, query_cliques)
-
-    ranks = 1.0 / (mask.argmax(axis=1) + 1.0)
-
-    cumsum = np.cumsum(mask, axis=1)
-    mask2 = mask * cumsum
-    mask2 = mask2 / np.arange(1, mask2.shape[-1] + 1)
-    average_precisions = np.sum(mask2, axis=1) / np.sum(mask, axis=1)
-
-    return (ranks, average_precisions)
+    return {'f1': f1, 'iou': iou}
 
 
-def dir_checker(output_dir: str) -> str:
+def dir_checker(output_dir: str, config_path: str) -> str:
     output_dir = re.sub(r"run-[0-9]+/*", "", output_dir)
     runs = glob.glob(os.path.join(output_dir, "run-*"))
     if runs != []:
@@ -58,14 +44,22 @@ def dir_checker(output_dir: str) -> str:
     else:
         run = 0
     outdir = os.path.join(output_dir, f"run-{run}")
+
+    # Create directory for current run and copy config file
+    os.makedirs(outdir, exist_ok=True)
+    filename = os.path.basename(config_path)
+    dst = os.path.join(outdir, filename)
+    shutil.copy2(config_path, dst)
     return outdir
 
 def save_test_predictions(predictions: List, output_dir: str) -> None:
+    #TODO
     with open(os.path.join(output_dir, 'submission.txt'), 'w') as foutput:
         for query_item, query_nearest in predictions:
             foutput.write('{}\t{}\n'.format(query_item, '\t'.join(map(str,query_nearest))))
 
 def save_predictions(outputs: Dict[str, np.ndarray], output_dir: str) -> None:
+    #TODO
     os.makedirs(output_dir, exist_ok=True)
     for key in outputs:
         if "_ids" in key:

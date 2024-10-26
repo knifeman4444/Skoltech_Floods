@@ -1,45 +1,49 @@
-data_path: "/home/singleton/cover_detection_contest_2024/data/"
-file_extension: "npy"
+root_path: "your_root_path"
 save_model_path: "models"
 debug: True
 progress_bar: True
 device: "cuda:0"
-num_channels: 1
+exp_short_description: "baseline"
+wandb_log: False
 
 train:
-  dataset_path: "/home/singleton/cover_detection_contest_2024/data/train/"
-  mixed_precision: False
-  num_classes: 39535
-  triplet_margin: 0.3
-  smooth_factor: 0.1
-  dropout: 0.1
+  #mixed_precision?
+  dataset_path: "train"
   model_ckpt: null
-  batch_size: 400
   num_workers: 0
   shuffle: True
   drop_last: True
   epochs: 25
-  learning_rate: 0.0001
-  patience: 4
   log_steps: 10
+  patience: 100000
+
+train_model:
+  #dropout: 0.1
+  backbone: "timm-efficientnet-b5"
+  pretrain: "imagenet"
+  num_channels: 10
+
+train_params:
+  batch_size: 64
+  learning_rate: 0.0001
+  tile_size: 256
+  #TODO lr scheduler
 
 val:
-  dataset_path: "/home/singleton/cover_detection_contest_2024/data/train/"
+  dataset_path: "train"
   save_val_outputs: True
-  max_seq_len: -1
-  batch_size: 400
+  batch_size: 64
   num_workers: 0
   shuffle: False
   drop_last: False
   output_dir: "outputs_val"
 
+#TODO
 test:
-  dataset_path: "/home/singleton/cover_detection_contest_2024/data/test/"
+  dataset_path: "train"
   save_test_outputs: True
-  #model_ckpt: "/home/singleton/cover_detection_contest_2024/bytecover/outputs_val/run-0/model/best-model-epoch=6-max_secs=50.pt"
   model_ckpt: null
-  max_seq_len: -1
-  batch_size: 1
+  batch_size: 64
   num_workers: 0
   shuffle: False
   drop_last: False

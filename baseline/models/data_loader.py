@@ -1,4 +1,5 @@
 import os
+import logging
 from typing import Dict, Literal, Tuple
 from time import time
 import numpy as np
@@ -6,121 +7,122 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
+import rasterio
+import random
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
+from tqdm import tqdm
 
 from models.data_model import BatchDict
 from utils import bcolors
+
+
+logger: logging.Logger = logging.getLogger()  # The logger used to log output
+
+
+def normalize(band):
+    band_min, band_max = (band.min(), band.max())
+    return ((band - band_min) / ((band_max - band_min)))
+
+
+transform = A.Compose([
+    A.HorizontalFlip(p=0.5),  # Горизонтальный поворот
+    A.VerticalFlip(p=0.5),    # Вертикальный поворот
+    #A.RandomBrightnessContrast(p=0.2),  # Изменение яркости и контрастности
+    #A.HueSaturationValue(p=0.2),  # Изменение оттенка и насыщенности
+    #ToTensorV2()  # Преобразование в тензор PyTorch
+])
+
+def augmentations(image, mask):
+    augmented = transform(image=image.transpose(1, 2, 0),  # Меняем оси на (H, W, C)
+                          mask=mask.transpose(1, 2, 0))
+    augmented_image = augmented['image'].transpose(2, 0, 1)
+    augmented_mask = augmented['mask'].transpose(2, 0, 1)
+    return augmented_image, augmented_mask
+
 
 class CoverDataset(Dataset):
     def __init__(
         self,
         data_path: str,
-        file_ext: str,
-        dataset_path: str,
-        data_split: Literal["train", "val", "test"],
-        debug: bool,
-        max_len: int,
+        data_split: Literal["train", "val"],
+        tile_size: int = 256
     ) -> None:
         super().__init__()
         self.data_path = data_path
-        self.file_ext = file_ext
-        self.dataset_path = dataset_path
         self.data_split = data_split
-        self.debug = debug
-        self.max_len = max_len
+        self.tile_size = tile_size
         self._load_data()
-        self.rnd_indices = np.random.permutation(len(self.track_ids))
-        self.current_index = 0
 
     def __len__(self) -> int:
-        return len(self.track_ids)
+        return len(self.images)
 
-    def __getitem__(self, index: int) -> BatchDict:
-        track_id = self.track_ids[index]
-        anchor_cqt = self._load_cqt(track_id)
-        
+    def __getitem__(self, index: int):
+        image = self.images[index]
+        mask = self.masks[index]
         if self.data_split == "train":
-            clique_id = self.version2clique.loc[track_id, 'clique']
-            pos_id, neg_id = self._triplet_sampling(track_id, clique_id)        
-            positive_cqt = self._load_cqt(pos_id)
-            negative_cqt = self._load_cqt(neg_id)
-        else:
-            clique_id = -1
-            pos_id = torch.empty(0)
-            positive_cqt = torch.empty(0)
-            neg_id = torch.empty(0)
-            negative_cqt = torch.empty(0)
+            image, mask = augmentations(image, mask)
+        image = torch.from_numpy(image.copy())
+        mask = torch.from_numpy(mask.copy())
         return dict(
-            anchor_id=track_id,
-            anchor=anchor_cqt,
-            anchor_label=torch.tensor(clique_id, dtype=torch.float),
-            positive_id=pos_id,
-            positive=positive_cqt,
-            negative_id=neg_id,
-            negative=negative_cqt,
+            image=image,
+            mask=mask,
         )
 
-    def _make_file_path(self, track_id, file_ext):
-        a = track_id % 10
-        b = track_id // 10 % 10
-        c = track_id // 100 % 10
-        return os.path.join(str(c), str(b), str(a), f'{track_id}.{file_ext}')
-
-    def _triplet_sampling(self, track_id: int, clique_id: int) -> Tuple[int, int]:
-        versions = self.versions.loc[clique_id, "versions"]
-        pos_list = np.setdiff1d(versions, track_id)
-        pos_id = np.random.choice(pos_list, 1)[0]
-        if self.current_index >= len(self.rnd_indices):
-            self.current_index = 0
-            self.rnd_indices = np.random.permutation(len(self.track_ids))
-        neg_id = self.track_ids[self.rnd_indices[self.current_index]]
-        self.current_index += 1
-        while neg_id in versions:
-            if self.current_index >= len(self.rnd_indices):
-                self.current_index = 0
-                self.rnd_indices = np.random.permutation(len(self.track_ids))
-            neg_id = self.track_ids[self.rnd_indices[self.current_index]]
-            self.current_index += 1
-        return (pos_id, neg_id)
-
     def _load_data(self) -> None:
-        if self.data_split in ['train', 'val']:
-            cliques_subset = np.load(os.path.join(self.data_path, "splits", "{}_cliques.npy".format(self.data_split)))
-            self.versions = pd.read_csv(
-                os.path.join(self.data_path, "cliques2versions.tsv"), sep='\t', converters={"versions": eval}
-            )
-            self.versions = self.versions[self.versions["clique"].isin(set(cliques_subset))]
-            mapping = {}
-            for k, clique in enumerate(sorted(cliques_subset)):
-                mapping[clique] = k
-            self.versions["clique"] = self.versions["clique"].map(lambda x: mapping[x])
-            self.versions.set_index("clique", inplace=True)
-            self.version2clique = pd.DataFrame(
-                [{'version': version, 'clique': clique} for clique, row in self.versions.iterrows() for version in row['versions']]
-            ).set_index('version')
-            self.track_ids = self.version2clique.index.to_list()
-        else:
-            self.track_ids = np.load(os.path.join(self.data_path, "splits", "{}_ids.npy".format(self.data_split)))
+        """
+        Load train or val data and divide it into small tiles (f.g. 256x256)
+        """
+        if self.data_split == "train":
+            file_names = ['1', '2', '4', '5', '6_1', '6_2']
+        elif self.data_split == "val":
+            file_names = ['6_1', '6_2', '9_1', '9_2']
+        
+        pictures_and_masks = []
+        logger.info(f'uploading {self.data_split} data...')
+        for file_name in tqdm(file_names[:1]):
+            image_path = os.path.join(self.data_path, 'images', file_name + '.tif')
+            mask_path = os.path.join(self.data_path, 'masks', file_name + '.tif')
+            with rasterio.open(image_path) as fin:
+                picture = []
+                for i in range(10):
+                    chan = normalize(fin.read(i + 1))
+                    if self.data_split == "train" and file_name[0] == '6':
+                        chan = chan[:, :8000]
+                    elif self.data_split == "val" and file_name[0] == '6':
+                        chan = chan[:, 8000:]
+                    picture.append(chan)
+                picture = np.stack(picture)
+            with rasterio.open(mask_path) as fin:
+                mask = fin.read(1)
+                if self.data_split == "train" and file_name[0] == '6':
+                    mask = mask[:, :8000]
+                elif self.data_split == "val" and file_name[0] == '6':
+                    mask = mask[:, 8000:]
+                mask = np.expand_dims(mask, axis=0)
+            pictures_and_masks.append((picture.astype(np.float32), mask.astype(np.float32)))
+        
+        logger.info(f'dividing into tiles ...')
+        self.images = []
+        self.masks = []
+        tile_size = self.tile_size
+        for image, mask in tqdm(pictures_and_masks):
+            assert image.shape[1:] == mask.shape[1:], (image.shape, mask.shape)
+            _, h, w = image.shape
 
-    def _load_cqt(self, track_id: str) -> torch.Tensor:
-        filename = os.path.join(self.dataset_path, self._make_file_path(track_id, self.file_ext))
-        cqt_spectrogram = np.load(filename)
-        return torch.from_numpy(cqt_spectrogram)
+            for h_coord in range(0, h // tile_size):
+                for w_coord in range(0, w // tile_size):
+                    y = h_coord * tile_size
+                    x = w_coord * tile_size
+                    self.images.append(image[:, y: y + tile_size, x: x + tile_size])
+                    self.masks.append(mask[:, y: y + tile_size, x: x + tile_size])
 
 
-def cover_dataloader(
-    data_path: str,
-    file_ext: str,
-    dataset_path: str,
-    data_split: Literal["train", "val", "test"],
-    debug: bool,
-    max_len: int,
-    batch_size: int,
-    **config: Dict,
-) -> DataLoader:
+def get_dataloader(config: Dict, data_split: str, batch_size: int) -> DataLoader:
     return DataLoader(
-        CoverDataset(data_path, file_ext, dataset_path, data_split, debug, max_len=max_len),
-        batch_size=batch_size if max_len > 0 else 1,
-        num_workers=config["num_workers"],
-        shuffle=config["shuffle"],
-        drop_last=config["drop_last"],
+        CoverDataset(config[data_split]['dataset_path'], data_split, config["train_params"]['tile_size']),
+        batch_size=batch_size,
+        num_workers=config[data_split]["num_workers"],
+        shuffle=config[data_split]["shuffle"],
+        drop_last=config[data_split]["drop_last"],
     )

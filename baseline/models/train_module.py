@@ -10,12 +10,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm, trange
 
-from models.data_model import BatchDict, Postfix, TestResults, ValDict
+from models.data_model import BatchDict, Postfix, TestResults
 from models.early_stopper import EarlyStopper
-from models.modules import Bottleneck, Resnet50
 from models.utils import (
-    calculate_ranking_metrics,
-    dataloader_factory,
+    calculate_metrics,
     dir_checker,
     reduce_func,
     save_best_log,
@@ -23,46 +21,64 @@ from models.utils import (
     save_predictions,
     save_test_predictions
 )
+from models.data_loader import get_dataloader
+import segmentation_models_pytorch as smp
+import wandb
+
 
 logger: logging.Logger = logging.getLogger()  # The logger used to log output
 
 
 class TrainModule:
-    def __init__(self, config: Dict) -> None:
+    def __init__(self, config: Dict, wandb_token: str, config_path: str) -> None:
+        # Initialize the parameters from the config
         self.config = config
         self.state = "initializing"
         self.best_model_path: str = None
-        self.num_classes = self.config["train"]["num_classes"]
-        self.max_len = 50
+        self.wandb_log = self.config["wandb_log"]
+        self.config_path = config_path
 
-        self.model = Resnet50(
-            Bottleneck,
-            num_channels=self.config["num_channels"],
-            num_classes=self.num_classes,
-            dropout=self.config["train"]["dropout"]
+        self.model = smp.Unet(
+            encoder_name=self.config["train_model"]["backbone"],
+            encoder_weights=self.config["train_model"]["pretrain"],
+            in_channels=self.config["train_model"]["num_channels"],
+            classes=1,
+            activation='sigmoid'
         )
         self.model.to(self.config["device"])
         self.postfix: Postfix = {}
 
-        #self.triplet_loss = nn.TripletMarginLoss(margin=config["train"]["triplet_margin"])
-        self.triplet_loss = nn.TripletMarginWithDistanceLoss(distance_function=lambda x, y: 1.0 - F.cosine_similarity(x, y), margin=config["train"]["triplet_margin"])
-        self.cls_loss = nn.CrossEntropyLoss(label_smoothing=config["train"]["smooth_factor"])
-
+        def my_dice_loss(p, y):
+            loss = 1 - (2 * (p * y).sum() + 1) / (p.sum() + y.sum() + 1)
+            return loss
+        
+        self.loss = my_dice_loss
         self.early_stop = EarlyStopper(patience=self.config["train"]["patience"])
         self.optimizer = self.configure_optimizers()
-        if self.config["device"] != "cpu":
-            #self.scaler = torch.cuda.amp.GradScaler(enabled=self.config["train"]["mixed_precision"])
-            self.scaler = torch.amp.GradScaler('cuda', enabled=self.config["train"]["mixed_precision"])
+        self.wandb_token = wandb_token
 
-    def pipeline(self) -> None:
-        self.config["val"]["output_dir"] = dir_checker(self.config["val"]["output_dir"])
+        self.config["train"]["dataset_path"] = os.path.join(self.config["root_path"], self.config["train"]["dataset_path"])
+        self.config["val"]["dataset_path"] = os.path.join(self.config["root_path"], self.config["val"]["dataset_path"])
+        self.config["test"]["dataset_path"] = os.path.join(self.config["root_path"], self.config["test"]["dataset_path"])
 
+        # Load the model
         if self.config["train"]["model_ckpt"] is not None:
             self.model.load_state_dict(torch.load(self.config["train"]["model_ckpt"]), strict=False)
             logger.info(f'Model loaded from checkpoint: {self.config["train"]["model_ckpt"]}')
 
-        self.t_loader = dataloader_factory(config=self.config, data_split="train")
-        self.v_loader = dataloader_factory(config=self.config, data_split="val")
+    def pipeline(self) -> None:
+        # Create new folder and init wandb
+        self.config["val"]["output_dir"] = dir_checker(self.config["val"]["output_dir"], self.config_path)
+        if self.wandb_log:
+            wandb.login(key=self.wandb_token)
+            wandb.init(
+                entity="knife_team",
+                project="skoltech_floods",
+                config=self.config
+            )
+
+        self.t_loader = get_dataloader(config=self.config, data_split="train", batch_size=self.config["train_params"]["batch_size"])
+        self.v_loader = get_dataloader(config=self.config, data_split="val", batch_size=self.config["val"]["batch_size"])
 
         self.state = "running"
 
@@ -84,24 +100,17 @@ class TrainModule:
             except Exception as err:
                 raise (err)
 
-            #'''
             if self.state == "interrupted":
                 self.validation_procedure()
                 self.pbar.set_postfix(
-                    {k: self.postfix[k] for k in self.postfix.keys() & {"train_loss_step", "mr1", "mAP"}}
+                    {k: self.postfix[k] for k in self.postfix.keys() & {"train_loss_step", "f1", "iou"}}
                 )
-            #'''
 
-        self.state = "finished"
-
-    def validate(self) -> None:
-        self.v_loader = dataloader_factory(config=self.config, data_split="val")
-        self.state = "running"
-        self.validation_procedure()
         self.state = "finished"
 
     def test(self) -> None:
-        self.test_loader = dataloader_factory(config=self.config, data_split="test")
+        #TODO
+        #self.test_loader = dataloader_factory(config=self.config, data_split="test")
         self.test_results: TestResults = {}
 
         if self.best_model_path is not None:
@@ -120,9 +129,6 @@ class TrainModule:
     def train_procedure(self) -> None:
         self.model.train()
         train_loss_list = []
-        train_cls_loss_list = []
-        train_triplet_loss_list = []
-        self.max_len = self.t_loader.dataset.max_len
         for step, batch in tqdm(
             enumerate(self.t_loader),
             total=len(self.t_loader),
@@ -131,120 +137,75 @@ class TrainModule:
             leave=False,
         ):
             train_step = self.training_step(batch)
-            self.postfix["train_loss_step"] = float(f"{train_step['train_loss_step']:.3f}")
-            train_loss_list.append(train_step["train_loss_step"])
-            self.postfix["train_cls_loss_step"] = float(f"{train_step['train_cls_loss']:.3f}")
-            train_cls_loss_list.append(train_step["train_cls_loss"])
-            self.postfix["train_triplet_loss_step"] = float(f"{train_step['train_triplet_loss']:.3f}")
-            train_triplet_loss_list.append(train_step["train_triplet_loss"])
+            self.postfix["train_loss_step"] = float(f"{train_step:.3f}")
+            train_loss_list.append(train_step)
             self.pbar.set_postfix(
-                {k: self.postfix[k] for k in self.postfix.keys() & {"train_loss_step", "mr1", "mAP"}}
+                {k: self.postfix[k] for k in self.postfix.keys() & {"train_loss_step", "f1", "iou"}}
             )
             if step % self.config["train"]["log_steps"] == 0:
                 save_logs(
                     dict(
                         epoch=self.postfix["Epoch"],
-                        seq_len=self.max_len,
                         step=step,
-                        train_loss_step=f"{train_step['train_loss_step']:.3f}",
-                        train_cls_loss_step=f"{train_step['train_cls_loss']:.3f}",
-                        train_triplet_loss_step=f"{train_step['train_triplet_loss']:.3f}",
+                        train_loss_step=f"{train_step:.3f}",
                     ),
                     output_dir=self.config["val"]["output_dir"],
                     name="log_steps",
                 )
+                if self.wandb_log:
+                    wandb.log({"train_loss": train_step})
         train_loss = torch.tensor(train_loss_list)
-        train_cls_loss = torch.tensor(train_cls_loss_list)
-        train_triplet_loss = torch.tensor(train_triplet_loss_list)
         self.postfix["train_loss"] = train_loss.mean().item()
-        self.postfix["train_cls_loss"] = train_cls_loss.mean().item()
-        self.postfix["train_triplet_loss"] = train_triplet_loss.mean().item()
         self.validation_procedure()
         self.overfit_check()
-        self.pbar.set_postfix({k: self.postfix[k] for k in self.postfix.keys() & {"train_loss_step", "mr1", "mAP"}})
+        self.pbar.set_postfix({k: self.postfix[k] for k in self.postfix.keys() & {"train_loss_step", "f1", "iou"}})
 
     def training_step(self, batch: BatchDict) -> Dict[str, float]:
-        with torch.autocast(
-            device_type=self.config["device"].split(":")[0], enabled=self.config["train"]["mixed_precision"]
-        ):
-            anchor = self.model.forward(batch["anchor"].to(self.config["device"]))
-            positive = self.model.forward(batch["positive"].to(self.config["device"]))
-            negative = self.model.forward(batch["negative"].to(self.config["device"]))
-            l1 = self.triplet_loss(anchor["f_t"], positive["f_t"], negative["f_t"])
-            labels = nn.functional.one_hot(batch["anchor_label"].long(), num_classes=self.num_classes)
-            l2 = self.cls_loss(anchor["cls"], labels.float().to(self.config["device"]))
-            loss = l1 + l2
+        preds = self.model.forward(batch["image"].to(self.config["device"]))
+        loss = self.loss(preds, batch["mask"].to(self.config["device"]))
 
         self.optimizer.zero_grad()
-        if self.config["device"] != "cpu":
-            self.scaler.scale(loss).backward()
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-        else:
-            loss.backward()
-            self.optimizer.step()
+        loss.backward()
+        self.optimizer.step()
 
-        return {"train_loss_step": loss.item(), "train_triplet_loss": l1.item(), "train_cls_loss": l2.item()}
+        return loss.item()
 
     def validation_procedure(self) -> None:
         self.model.eval()
-        embeddings: Dict[int, torch.Tensor] = {}
+        all_preds = []
+        all_labels = []
         for batch in tqdm(self.v_loader, disable=(not self.config["progress_bar"]), position=1, leave=False):
-            val_dict = self.validation_step(batch)
-            if val_dict["f_t"].ndim == 1:
-                val_dict["f_c"] = val_dict["f_c"].unsqueeze(0)
-                val_dict["f_t"] = val_dict["f_t"].unsqueeze(0)
-            for anchor_id, triplet_embedding, embedding in zip(val_dict["anchor_id"], val_dict["f_t"], val_dict["f_c"]):
-                embeddings[anchor_id] = torch.stack([triplet_embedding, embedding])
+            preds = self.validation_step(batch)
+            preds = (preds > 0.5).astype(float)
+            all_preds.append(preds)
+            all_labels.append(batch["mask"].numpy())
+        all_preds = np.concatenate([array.flatten() for array in all_preds])
+        all_labels = np.concatenate([array.flatten() for array in all_labels])
+        metrics = calculate_metrics(all_preds, all_labels)
+        for key, value in metrics.items():
+            self.postfix[key] = value
 
-        val_outputs = self.validation_epoch_end(embeddings)
         logger.info(
             f"\n{' Validation Results ':=^50}\n"
             + "\n".join([f'"{key}": {value}' for key, value in self.postfix.items()])
             + f"\n{' End of Validation ':=^50}\n"
         )
+        if self.wandb_log:
+            wandb.log({f"val_{key}": value for key, value in metrics.items()})
 
         if self.config["val"]["save_val_outputs"]:
-            val_outputs["val_embeddings"] = torch.stack(list(embeddings.values()))[:, 1].numpy()
-            save_predictions(val_outputs, output_dir=self.config["val"]["output_dir"])
+            #TODO
+            # val_outputs["val_embeddings"] = torch.stack(list(embeddings.values()))[:, 1].numpy()
+            # save_predictions(val_outputs, output_dir=self.config["val"]["output_dir"])
             save_logs(self.postfix, output_dir=self.config["val"]["output_dir"])
         self.model.train()
 
-    def validation_epoch_end(self, outputs: Dict[int, torch.Tensor]) -> Dict[int, np.ndarray]:
-        #val_loss = torch.zeros(len(outputs))
-        #pos_ids = []
-        #neg_ids = []
-        clique_ids = []
-        for k, (anchor_id, embeddings) in enumerate(outputs.items()):
-            #clique_id, pos_id, neg_id = self.v_loader.dataset._triplet_sampling(anchor_id)
-            #val_loss[k] = self.triplet_loss(embeddings[0], outputs[pos_id][0], outputs[neg_id][0]).item()
-            #pos_ids.append(pos_id)
-            #neg_ids.append(neg_id)
-            clique_id = self.v_loader.dataset.version2clique.loc[anchor_id, 'clique']
-            clique_ids.append(clique_id)
-        #anchor_ids = np.stack(list(outputs.keys()))
-        preds = torch.stack(list(outputs.values()))[:, 1]
-        #self.postfix["val_loss"] = val_loss.mean().item()
-        rranks, average_precisions = calculate_ranking_metrics(embeddings=preds.numpy(), cliques=clique_ids)
-        self.postfix["mrr"] = rranks.mean()
-        self.postfix["mAP"] = average_precisions.mean()
-        return {
-            #"triplet_ids": np.stack(list(zip(clique_ids, anchor_ids, pos_ids, neg_ids))),
-            "rranks": rranks,
-            "average_precisions": average_precisions,
-        }
-
-    def validation_step(self, batch: BatchDict) -> ValDict:
-        anchor_id = batch["anchor_id"]
-        features = self.model.forward(batch["anchor"].to(self.config["device"]))
-
-        return {
-            "anchor_id": anchor_id.numpy(),
-            "f_t": features["f_t"].squeeze(0).detach().cpu(),
-            "f_c": features["f_c"].squeeze(0).detach().cpu(),
-        }
+    def validation_step(self, batch: BatchDict):
+        preds = self.model.forward(batch["image"].to(self.config["device"]))
+        return preds.detach().cpu().numpy()
 
     def test_procedure(self) -> None:
+        #TODO
         self.model.eval()
         embeddings: Dict[str, torch.Tensor] = {}
         trackids: List[int] = []
@@ -261,24 +222,24 @@ class TrainModule:
             for query_indx, query_nearest_items in chunk_result:
                 predictions.append((trackids[query_indx], [trackids[nn_indx] for nn_indx in query_nearest_items]))
         save_test_predictions(predictions, output_dir=self.config["test"]["output_dir"])
-
+    
     def overfit_check(self) -> None:
-        if self.early_stop(self.postfix["mAP"]):
+        validation_metric_name = 'f1'
+        if self.early_stop(self.postfix[validation_metric_name]):
             logger.info(f"\nValidation not improved for {self.early_stop.patience} consecutive epochs. Stopping...")
             self.state = "early_stopped"
 
         if self.early_stop.counter > 0:
-            logger.info("\nValidation mAP was not improved")
+            logger.info(f"\nValidation metric ({validation_metric_name}) was not improved")
         else:
-            logger.info(f"\nMetric improved. New best score: {self.early_stop.max_validation_mAP:.3f}")
+            logger.info(f"\nMetric improved. New best score: {self.early_stop.max_validation_metric:.3f}")
             save_best_log(self.postfix, output_dir=self.config["val"]["output_dir"])
 
             logger.info("Saving model...")
             epoch = self.postfix["Epoch"]
-            max_secs = self.max_len
             prev_model = deepcopy(self.best_model_path)
             self.best_model_path = os.path.join(
-                self.config["val"]["output_dir"], "model", f"best-model-{epoch=}-{max_secs=}.pt"
+                self.config["val"]["output_dir"], "model", f"best-model-epoch={epoch}.pt"
             )
             os.makedirs(os.path.dirname(self.best_model_path), exist_ok=True)
             torch.save(deepcopy(self.model.state_dict()), self.best_model_path)
@@ -286,6 +247,6 @@ class TrainModule:
                 os.remove(prev_model)
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.config["train"]["learning_rate"])
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.config["train_params"]["learning_rate"])
 
         return optimizer

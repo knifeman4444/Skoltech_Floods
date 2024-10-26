@@ -10,6 +10,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm, trange
 
+import models.custom_models
 from models.data_model import BatchDict, Postfix, TestResults
 from models.early_stopper import EarlyStopper
 from models.utils import (
@@ -25,9 +26,7 @@ from models.data_loader import get_dataloader
 import segmentation_models_pytorch as smp
 import wandb
 
-
 logger: logging.Logger = logging.getLogger()  # The logger used to log output
-
 
 class TrainModule:
     def __init__(self, config: Dict, wandb_token: str, config_path: str) -> None:
@@ -38,13 +37,19 @@ class TrainModule:
         self.wandb_log = self.config["wandb_log"]
         self.config_path = config_path
 
-        self.model = smp.Unet(
-            encoder_name=self.config["train_model"]["backbone"],
-            encoder_weights=self.config["train_model"]["pretrain"],
-            in_channels=self.config["train_model"]["num_channels"],
-            classes=1,
-            activation='sigmoid'
-        )
+        if not config["train_model"].get('model'):
+            self.model = smp.Unet(
+                encoder_name=self.config["train_model"]["backbone"],
+                encoder_weights=self.config["train_model"]["pretrain"],
+                in_channels=self.config["train_model"]["num_channels"],
+                classes=1,
+                activation='sigmoid'
+            )
+        elif config["train_model"]['model'] == "CustomVIT":
+            self.model = models.custom_models.CustomVIT(config=config)
+        else:
+            raise RuntimeError(f"model {self.config["train_model"]["model"]} in config does not exist")
+
         self.model.to(self.config["device"])
         #self.model = nn.DataParallel(self.model).to(self.config["device"])
         self.postfix: Postfix = {}
@@ -258,3 +263,5 @@ class TrainModule:
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.config["train_params"]["learning_rate"])
 
         return optimizer
+
+#%%

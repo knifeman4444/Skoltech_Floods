@@ -5,6 +5,7 @@ import rasterio
 import pathlib
 
 #from models.load_elevations import load_and_add_elevation_data
+from models.load_elevations import load_and_add_osm_data
 
 BANDS_S2 = ["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B8", "B8A", "B9", "B10", "B11", "B12"]
 OUR_BANDS = ["B2", "B3", "B4", "B5", "B6", "B7", "B8", "B8A", "B11", "B12"]
@@ -36,19 +37,17 @@ def is_tile_valid(mask: np.ndarray) -> bool:
     Checks that there are not too many clouds, not too much invalid data
     """
     
-    max_clouds = 0.1
-    max_invalid = 0.1
+    max_clouds = 0.2
+    max_invalid = 0.2
     n_pixels = mask.size
     n_clouds = np.sum(mask == 3)
     n_invalid = np.sum(mask == 0)
     n_water = np.sum(mask == 2)
     
-    return n_clouds / n_pixels < max_clouds and n_invalid / n_pixels < max_invalid and (
-        n_water / n_pixels >= 0.05 and n_water / n_pixels <= 0.95
-    )
+    return n_clouds / n_pixels < max_clouds and n_invalid / n_pixels < max_invalid and n_water / n_pixels >= 0.01
 
 
-def load_from_folder(folder: str, split="test", filename=None, elevation=False) -> Tuple[np.ndarray, np.ndarray]:
+def load_from_folder(folder: str, split="test", filename=None, elevation=False, osm=False) -> Tuple[np.ndarray, np.ndarray]:
     """
     Load image and mask from a given folder
     
@@ -68,11 +67,12 @@ def load_from_folder(folder: str, split="test", filename=None, elevation=False) 
         filename = np.random.choice(os.listdir(folder_S2))
         print(f"Chosen filename: {filename}")
     
-    if not elevation:
+    if not elevation and not osm:
         image = rasterio.open(os.path.join(folder_S2, filename)).read()
+    if osm:
+        image = load_and_add_osm_data(os.path.join(folder_S2, filename))
     else:
-        # image = load_and_add_elevation_data(os.path.join(folder_S2, filename))
-        raise NotImplementedError("Elevation data is not supported yet")
+        image = load_and_add_elevation_data(os.path.join(folder_S2, filename))
     mask = rasterio.open(os.path.join(folder_gt, filename)).read()[1][np.newaxis, :, :]
     
     return image, mask

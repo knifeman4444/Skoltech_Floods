@@ -1,6 +1,9 @@
 from models.train_module import TrainModule
 from utils import initialize_logging, load_config
 
+import warnings
+warnings.filterwarnings("ignore")
+
 config = load_config(config_path="./config/local_config.yaml")
 initialize_logging(config_path="./config/logging_config.yaml", debug=False)
 with open('wandb_token.txt', 'r') as f:

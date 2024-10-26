@@ -9,6 +9,7 @@ from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
 from models.data_loader import normalize
+from models.load_elevations import load_and_add_osm_data
 
 
 def transform_arr(arr):
@@ -36,6 +37,7 @@ class VisualisationDataset(Dataset):
             image_name: str,
             tile_size: int = 256,
             channels: int = 10,
+            include_osm: bool = False
     ) -> None:
         super().__init__()
         self.data_path = data_path
@@ -43,6 +45,7 @@ class VisualisationDataset(Dataset):
         self.tile_size = tile_size
         self.channels = channels
         self.batch_size = None
+        self.include_osm = include_osm
 
         self._load_data()
 
@@ -69,11 +72,7 @@ class VisualisationDataset(Dataset):
         image_path = os.path.join(self.data_path, 'images', self.image_name + '.tif')
         mask_path = os.path.join(self.data_path, 'masks', self.image_name + '.tif')
         with rasterio.open(image_path) as fin:
-            picture = []
-            for i in range(self.channels):
-                chan = normalize(fin.read(i + 1))
-                picture.append(chan)
-            picture = np.stack(picture)
+            picture = fin.read() if not self.include_osm else load_and_add_osm_data(image_path)
         with rasterio.open(mask_path) as fin:
             mask = fin.read(1)
             mask = np.expand_dims(mask, axis=0)
@@ -106,6 +105,7 @@ def visualize_model_predictions_for_image(model, config, image_name):
         '../dataset/train',
         image_name,
         config["train_params"]['tile_size'],
+        include_osm=config.get("include_osm", False)
     )
     dataloader = DataLoader(
         dataset=ds,

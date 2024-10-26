@@ -5,6 +5,7 @@ import rasterio
 import pathlib
 
 #from models.load_elevations import load_and_add_elevation_data
+from models.load_elevations import load_and_add_osm_data
 
 BANDS_S2 = ["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B8", "B8A", "B9", "B10", "B11", "B12"]
 OUR_BANDS = ["B2", "B3", "B4", "B5", "B6", "B7", "B8", "B8A", "B11", "B12"]
@@ -48,7 +49,7 @@ def is_tile_valid(mask: np.ndarray) -> bool:
     )
 
 
-def load_from_folder(folder: str, split="test", filename=None, elevation=False) -> Tuple[np.ndarray, np.ndarray]:
+def load_from_folder(folder: str, split="test", filename=None, elevation=False, osm=False) -> Tuple[np.ndarray, np.ndarray]:
     """
     Load image and mask from a given folder
     
@@ -68,8 +69,10 @@ def load_from_folder(folder: str, split="test", filename=None, elevation=False) 
         filename = np.random.choice(os.listdir(folder_S2))
         print(f"Chosen filename: {filename}")
     
-    if not elevation:
+    if not elevation and not osm:
         image = rasterio.open(os.path.join(folder_S2, filename)).read()
+    if osm:
+        image = load_and_add_osm_data(os.path.join(folder_S2, filename))
     else:
         # image = load_and_add_elevation_data(os.path.join(folder_S2, filename))
         raise NotImplementedError("Elevation data is not supported yet")

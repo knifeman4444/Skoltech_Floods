@@ -13,6 +13,7 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2
 from tqdm import tqdm
 from models.dataset_converter import is_tile_valid, load_from_folder, from_worldfloods
+from models.load_elevations import load_and_add_osm_data
 
 from models.data_model import BatchDict
 from utils import bcolors
@@ -21,11 +22,11 @@ from utils import bcolors
 logger: logging.Logger = logging.getLogger()  # The logger used to log output
 
 
-def normalize(band):
-    band_min, band_max = (band.min(), band.max())
-    if band_max == band_min:
-        return np.zeros(band.shape)
-    return (band - band_min) / (band_max - band_min)
+def normalize(img):
+    band_min, band_max = (np.min(img, axis=(1, 2)), np.max(img, axis=(1, 2)))
+    div = band_max - band_min
+    div[div == 0] = 1 # Avoid division by zero
+    return (img - band_min[:, None, None]) / div[:, None, None]
 
 
 transform = A.Compose([
@@ -43,7 +44,6 @@ def augmentations(image, mask):
     augmented_mask = augmented['mask'].transpose(2, 0, 1)
     return augmented_image, augmented_mask
 
-
 class SegmentationDataset(Dataset):
     def __init__(
         self,
@@ -53,7 +53,8 @@ class SegmentationDataset(Dataset):
         channels: int = 10,
         worldfloods_cnt: int = 0,
         worldfloods_folder: str = "",
-        worldfloods_files: List[str] = None
+        worldfloods_files: List[str] = None,
+        include_osm: bool = False,
     ) -> None:
         super().__init__()
         self.data_path = data_path
@@ -63,6 +64,7 @@ class SegmentationDataset(Dataset):
         self.worldfloods_cnt = worldfloods_cnt
         self.worldfloods_folder = worldfloods_folder
         self.worldfloods_files = worldfloods_files
+        self.include_osm = include_osm
         
         if worldfloods_cnt > 0 and not os.path.exists(worldfloods_folder):
             raise FileNotFoundError(f"Folder {worldfloods_folder} does not exist")
@@ -109,28 +111,24 @@ class SegmentationDataset(Dataset):
         for file_name in tqdm(file_names):
             
             if not file_name[0].isdigit():
-                image, mask = load_from_folder(self.worldfloods_folder, self.data_split, file_name)
-                for i in range(image.shape[0]):
-                    image[i] = normalize(image[i])
+                image, mask = load_from_folder(self.worldfloods_folder, self.data_split, file_name, osm=self.include_osm)
+                image = normalize(image.astype(np.float32))
                 pictures_and_masks.append((image.astype(np.float32), mask.astype(np.float32)))
                 continue
             
             image_path = os.path.join(self.data_path, 'images', file_name + '.tif')
             mask_path = os.path.join(self.data_path, 'masks', file_name + '.tif')
             with rasterio.open(image_path) as fin:
-                picture = []
-                for i in range(self.channels):
-                    chan = normalize(fin.read(i + 1))
-                    if self.data_split == "train" and file_name == '6_1':
-                        chan = chan[:, :8000]
-                    elif self.data_split == "val" and file_name == '6_1':
-                        chan = chan[:, 8000:]
-                    if self.data_split == "train" and file_name == '6_2':
-                        chan = chan[:, :5000]
-                    elif self.data_split == "val" and file_name == '6_2':
-                        chan = chan[:, 5000:]
-                    picture.append(chan)
-                picture = np.stack(picture)
+                picture = fin.read() if not self.include_osm else load_and_add_osm_data(image_path)
+                picture = normalize(picture.astype(np.float32))
+                if self.data_split == "train" and file_name == '6_1':
+                    picture = picture[:, :, :8000]
+                elif self.data_split == "val" and file_name == '6_1':
+                    picture = picture[:, :, 8000:]
+                if self.data_split == "train" and file_name == '6_2':
+                    picture = picture[:, :, :5000]
+                elif self.data_split == "val" and file_name == '6_2':
+                    picture = picture[:, :, 5000:]
             with rasterio.open(mask_path) as fin:
                 mask = fin.read(1)
                 if self.data_split == "train" and file_name == '6_1':
@@ -176,8 +174,8 @@ class SegmentationDataset(Dataset):
                     tile_mask = mask[:, i: i + tile_size, j: j + tile_size]
                     tile_image = image[:, i: i + tile_size, j: j + tile_size]
 
-                    if self.data_split == "train" and mask.sum() < 0.05 * mask.shape[0] * mask.shape[1]:
-                        continue
+                    # if self.data_split == "train" and mask.sum() < 0.05 * mask.shape[0] * mask.shape[1]:
+                    #     continue
 
                     if ch > 11:
                         # Image from worldfloods
@@ -204,6 +202,7 @@ def get_dataloader(config: Dict, data_split: str, batch_size: int) -> DataLoader
             config["train_params"]['tile_size'],
             worldfloods_cnt=config.get("worldfloods_cnt", 0),
             worldfloods_folder=config.get("worldfloods_folder", ""),
+            include_osm=config.get("include_osm", False)
             ),
         batch_size=batch_size,
         num_workers=config[data_split]["num_workers"],

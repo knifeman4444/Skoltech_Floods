@@ -14,6 +14,7 @@ from torch.utils.data import DataLoader
 from models.data_loader import get_dataloader
 from models.data_model import Postfix
 from calculate_metrics import get_score
+import matplotlib.pyplot as plt
 
 from sklearn.metrics import f1_score
 
@@ -59,7 +60,7 @@ def make_full_masks(y_true, y_pred, coords, indices, tile_size) -> List[Tuple[np
                 pred1_full[x:x + tile_size, y:y + tile_size] = y_pred[i][j]
                 
                 # Center for the second predicted full image
-                pred2_full[x:x + half_ts, y:y + half_ts] = y_pred[i][j][quat_ts:-quat_ts, quat_ts:-quat_ts]
+                pred2_full[x + quat_ts:x + quat_ts + half_ts, y + quat_ts:y + quat_ts + half_ts] = y_pred[i][j][quat_ts:-quat_ts, quat_ts:-quat_ts]
 
         pred1_full[quat_ts:-quat_ts, quat_ts:-quat_ts] = pred2_full[quat_ts:-quat_ts, quat_ts:-quat_ts]
         masks.append((true_full.copy(), pred1_full.copy()))
@@ -67,9 +68,9 @@ def make_full_masks(y_true, y_pred, coords, indices, tile_size) -> List[Tuple[np
     return masks
 
 
-def calculate_metrics(y_true, y_pred, coords, indices, tile_size, osm_path) -> Dict[str, float]:
+def calculate_metrics(y_true, y_pred, coords, indices, tile_size, osm_path) -> Tuple[Dict[str, float], List[Tuple[np.ndarray, np.ndarray]]]:
     masks = make_full_masks(y_true, y_pred, coords, indices, tile_size)
-    metrics = get_score(masks, osm_path)
+    metrics = get_score(masks.copy(), osm_path)
 
     y_true = np.concatenate([mask[0].flatten() for mask in masks])
     y_pred = np.concatenate([mask[1].flatten() for mask in masks])
@@ -83,7 +84,7 @@ def calculate_metrics(y_true, y_pred, coords, indices, tile_size, osm_path) -> D
     iou = (intersection + epsilon) / (union + epsilon)
     f1 = f1_score(y_true, y_pred, average='macro')
 
-    return {**metrics, 'f1': f1, 'iou': iou}
+    return {**metrics, 'f1': f1, 'iou': iou}, masks
 
 
 def dir_checker(output_dir: str, config_path: str) -> str:
@@ -109,20 +110,26 @@ def save_test_predictions(predictions: List, output_dir: str) -> None:
         for query_item, query_nearest in predictions:
             foutput.write('{}\t{}\n'.format(query_item, '\t'.join(map(str,query_nearest))))
 
-def save_predictions(outputs: Dict[str, np.ndarray], output_dir: str) -> None:
-    #TODO
+def save_predictions(masks: List[Tuple[np.ndarray, np.ndarray]], output_dir: str) -> None:
     os.makedirs(output_dir, exist_ok=True)
-    for key in outputs:
-        if "_ids" in key:
-            with jsonlines.open(os.path.join(output_dir, f"{key}.jsonl"), "w") as f:
-                if len(outputs[key][0]) == 4:
-                    for clique, anchor, pos, neg in outputs[key]:
-                        f.write({"clique_id": clique, "anchor_id": anchor, "positive_id": pos, "negative_id": neg})
-                else:
-                    for clique, anchor in outputs[key]:
-                        f.write({"clique_id": clique, "anchor_id": anchor})
-        else:
-            np.save(os.path.join(output_dir, f"{key}.npy"), outputs[key])
+
+    for i, (mask_true, mask_pred) in enumerate(masks):
+        plt.figure()  # Создаём новую фигуру для каждого изображения
+        
+        # Сопоставление изображения и маски
+        plt.subplot(1, 2, 1)
+        plt.imshow(mask_true, cmap='gray')
+        plt.title('True')
+        plt.axis('off')
+        
+        plt.subplot(1, 2, 2)
+        plt.imshow(mask_pred, cmap='gray')
+        plt.title('Prediction')
+        plt.axis('off')
+        
+        # Сохранение графика в файл
+        plt.savefig(os.path.join(output_dir, f"prediction_{i}.png"), bbox_inches='tight')
+        plt.close()  # Закрываем фигуру для освобождения памяти
 
 
 def save_logs(outputs: dict, output_dir: str, name: str = "log") -> None:

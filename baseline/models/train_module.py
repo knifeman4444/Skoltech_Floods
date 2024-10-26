@@ -50,8 +50,8 @@ class TrainModule:
         else:
             raise RuntimeError(f"model {self.config["train_model"]["model"]} in config does not exist")
 
-        self.model.to(self.config["device"])
-        #self.model = nn.DataParallel(self.model).to(self.config["device"])
+        #self.model.to(self.config["device"])
+        self.model = nn.DataParallel(self.model).to(self.config["device"])
         self.postfix: Postfix = {}
 
         def my_dice_loss(p, y):
@@ -192,7 +192,7 @@ class TrainModule:
             all_labels.append(batch["mask"].numpy().squeeze())
             all_coords.append(np.array(list(zip(batch["coords"][0], batch["coords"][1]))))
             all_indices.append(batch["image_index"].numpy())
-        metrics = calculate_metrics(all_labels, all_preds, all_coords, all_indices,
+        metrics, masks = calculate_metrics(all_labels, all_preds, all_coords, all_indices,
                                     self.config['train_params']['tile_size'], self.config['val']['osm_path'])
 
         for key, value in metrics.items():
@@ -207,9 +207,7 @@ class TrainModule:
             wandb.log({f"val_{key}": value for key, value in metrics.items()})
 
         if self.config["val"]["save_val_outputs"]:
-            #TODO
-            # val_outputs["val_embeddings"] = torch.stack(list(embeddings.values()))[:, 1].numpy()
-            # save_predictions(val_outputs, output_dir=self.config["val"]["output_dir"])
+            save_predictions(masks, output_dir=self.config["val"]["output_dir"])
             save_logs(self.postfix, output_dir=self.config["val"]["output_dir"])
         self.model.train()
 

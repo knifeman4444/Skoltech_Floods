@@ -31,7 +31,7 @@ def normalize(band):
 transform = A.Compose([
     A.HorizontalFlip(p=0.5),  # Горизонтальный поворот
     A.VerticalFlip(p=0.5),    # Вертикальный поворот
-    #A.RandomBrightnessContrast(p=0.2),  # Изменение яркости и контрастности
+    A.RandomBrightnessContrast(p=0.2),  # Изменение яркости и контрастности
     #A.HueSaturationValue(p=0.2),  # Изменение оттенка и насыщенности
     #ToTensorV2()  # Преобразование в тензор PyTorch
 ])
@@ -44,7 +44,7 @@ def augmentations(image, mask):
     return augmented_image, augmented_mask
 
 
-class CoverDataset(Dataset):
+class SegmentationDataset(Dataset):
     def __init__(
         self,
         data_path: str,
@@ -121,25 +121,25 @@ class CoverDataset(Dataset):
                 picture = []
                 for i in range(self.channels):
                     chan = normalize(fin.read(i + 1))
-                    if self.data_split == "train" and file_name[0] == '6_1':
+                    if self.data_split == "train" and file_name == '6_1':
                         chan = chan[:, :8000]
-                    elif self.data_split == "val" and file_name[0] == '6_1':
+                    elif self.data_split == "val" and file_name == '6_1':
                         chan = chan[:, 8000:]
-                    if self.data_split == "train" and file_name[0] == '6_2':
+                    if self.data_split == "train" and file_name == '6_2':
                         chan = chan[:, :5000]
-                    elif self.data_split == "val" and file_name[0] == '6_2':
+                    elif self.data_split == "val" and file_name == '6_2':
                         chan = chan[:, 5000:]
                     picture.append(chan)
                 picture = np.stack(picture)
             with rasterio.open(mask_path) as fin:
                 mask = fin.read(1)
-                if self.data_split == "train" and file_name[0] == '6_1':
+                if self.data_split == "train" and file_name == '6_1':
                     mask = mask[:, :8000]
-                elif self.data_split == "val" and file_name[0] == '6_1':
+                elif self.data_split == "val" and file_name == '6_1':
                     mask = mask[:, 8000:]
-                if self.data_split == "train" and file_name[0] == '6_2':
+                if self.data_split == "train" and file_name == '6_2':
                     mask = mask[:, :5000]
-                elif self.data_split == "val" and file_name[0] == '6_2':
+                elif self.data_split == "val" and file_name == '6_2':
                     mask = mask[:, 5000:]
                 mask = np.expand_dims(mask, axis=0)
             pictures_and_masks.append((picture.astype(np.float32), mask.astype(np.float32)))
@@ -175,6 +175,10 @@ class CoverDataset(Dataset):
                     
                     tile_mask = mask[:, i: i + tile_size, j: j + tile_size]
                     tile_image = image[:, i: i + tile_size, j: j + tile_size]
+
+                    if self.data_split == "train" and mask.sum() < 0.05 * mask.shape[0] * mask.shape[1]:
+                        continue
+
                     if ch > 11:
                         # Image from worldfloods
                         if not is_tile_valid(tile_mask):
@@ -195,7 +199,7 @@ class CoverDataset(Dataset):
 
 def get_dataloader(config: Dict, data_split: str, batch_size: int) -> DataLoader:
     return DataLoader(
-        CoverDataset(
+        SegmentationDataset(
             config[data_split]['dataset_path'], data_split,
             config["train_params"]['tile_size'],
             worldfloods_cnt=config.get("worldfloods_cnt", 0),

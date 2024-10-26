@@ -4,7 +4,7 @@ import os
 import rasterio
 import pathlib
 
-from models.load_elevations import load_and_add_elevation_data
+#from models.load_elevations import load_and_add_elevation_data
 
 BANDS_S2 = ["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B8", "B8A", "B9", "B10", "B11", "B12"]
 OUR_BANDS = ["B2", "B3", "B4", "B5", "B6", "B7", "B8", "B8A", "B11", "B12"]
@@ -37,7 +37,7 @@ def is_tile_valid(mask: np.ndarray) -> bool:
     """
     
     max_clouds = 0.1
-    max_invalid = 0.01
+    max_invalid = 0.1
     n_pixels = mask.size
     n_clouds = np.sum(mask == 3)
     n_invalid = np.sum(mask == 0)
@@ -78,31 +78,33 @@ def load_from_folder(folder: str, split="test", filename=None, elevation=False) 
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
     
-    image, mask = load_from_folder("dataset/worldfloodsv2", elevation=False)
+    image, mask = load_from_folder("/home/kuzakov-dn/other/Skoltech_Floods/dataset/WorldFloodsv2", elevation=False)
     print(image.shape, mask.shape)
     
     # Taking random NxN tile
-    N = 512
+    N = 1024
     x = np.random.randint(0, image.shape[2] - N)
     y = np.random.randint(0, image.shape[1] - N)
     s_image = image[:, y:y+N, x:x+N]
-    s_mask = mask[y:y+N, x:x+N]
+    s_mask = mask[0][y:y+N, x:x+N]
     i = 0
     while not is_tile_valid(s_mask):
         x = np.random.randint(0, image.shape[2] - N)
         y = np.random.randint(0, image.shape[1] - N)
         s_image = image[:, y:y+N, x:x+N]
-        s_mask = mask[y:y+N, x:x+N]
+        s_mask = mask[0][y:y+N, x:x+N]
         i += 1
         if i > 100:
             raise ValueError("Could not find a valid tile")
         
     image, mask = from_worldfloods(s_image, s_mask)
+    print(mask.shape)
     
     fig, axs = plt.subplots(1, 2, figsize=(10, 5))
     axs[0].imshow((image[[2, 1, 0], :, :].transpose(1, 2, 0) / 3_500).clip(0, 1))
-    axs[1].imshow(mask[0, :, :])
-    plt.show()
+    axs[1].imshow(mask[:, :])
+    #plt.show()
+    plt.savefig('my_plot.png')
     
     
     

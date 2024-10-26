@@ -242,7 +242,7 @@ class TrainModule:
         save_test_predictions(predictions, output_dir=self.config["test"]["output_dir"])
     
     def overfit_check(self) -> None:
-        validation_metric_name = 'total_f1'
+        validation_metric_name = 'f1_water'
         if self.early_stop(self.postfix[validation_metric_name]):
             logger.info(f"\nValidation not improved for {self.early_stop.patience} consecutive epochs. Stopping...")
             self.state = "early_stopped"

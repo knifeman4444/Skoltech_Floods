@@ -48,7 +48,7 @@ class TrainModule:
         elif config["train_model"]['model'] == "CustomVIT":
             self.model = models.custom_models.CustomVIT(config=config)
         else:
-            raise RuntimeError(f'model {self.config["train_model"]["model"]} in config does not exist')
+            raise RuntimeError(f"model {self.config["train_model"]["model"]} in config does not exist")
 
         self.model.to(self.config["device"])
         #self.model = nn.DataParallel(self.model).to(self.config["device"])
@@ -263,5 +263,3 @@ class TrainModule:
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.config["train_params"]["learning_rate"])
 
         return optimizer
-
-#%%

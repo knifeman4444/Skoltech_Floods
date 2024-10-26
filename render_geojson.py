@@ -22,8 +22,8 @@ def load_raster(src):
 
 
 def load_mask(path):
+    """Load a mask"""
     with rasterio.open(path) as src:
-        """Load a raster image and flatten it into a 1D array."""
         data = src.read(1)
         return data
 

@@ -61,13 +61,13 @@ poolformer_settings = {
 
 
 class PoolFormer(nn.Module):     
-    def __init__(self, model_name: str = 'S24') -> None:
+    def __init__(self, in_channels, model_name: str = 'S24') -> None:
         super().__init__()
         assert model_name in poolformer_settings.keys(), f"PoolFormer model name should be in {list(poolformer_settings.keys())}"
         layers, embed_dims, drop_path_rate = poolformer_settings[model_name]
         self.channels = embed_dims
     
-        self.patch_embed = PatchEmbed(7, 4, 2, 3, embed_dims[0])
+        self.patch_embed = PatchEmbed(7, 4, 2, in_channels, embed_dims[0])
 
         network = []
 

@@ -13,6 +13,7 @@ from torch.utils.data import DataLoader
 
 from models.data_loader import get_dataloader
 from models.data_model import Postfix
+from calculate_metrics import get_score
 
 from sklearn.metrics import f1_score
 
@@ -22,7 +23,57 @@ def reduce_func(D_chunk, start):
     nearest_items = np.argsort(D_chunk, axis=1)[:, :top_size + 1]
     return [(i, items[items!=i]) for i, items in enumerate(nearest_items, start)]
 
-def calculate_metrics(y_true, y_pred) -> Dict[str, float]:
+
+def make_full_masks(y_true, y_pred, coords, indices, tile_size) -> List[Tuple[np.ndarray, np.ndarray]]:
+    # Find the number of images
+    num_img = indices[-1][-1] + 1
+    img_sizes = [[0, 0] for _ in range(num_img)]
+    
+    # Find the maximum size of the full image H and W
+    for i in range(len(coords)):
+        for j in range(len(coords[i])):  # Use len() for variable length
+            x, y = coords[i][j]
+            image_index = indices[i][j]
+            img_sizes[image_index][0] = max(img_sizes[image_index][0], x + tile_size)
+            img_sizes[image_index][1] = max(img_sizes[image_index][1], y + tile_size)
+    
+    half_ts = tile_size // 2
+    quat_ts = tile_size // 4
+    masks = []
+    for idx in range(num_img):
+        H, W = img_sizes[idx]
+        true_full = np.zeros((H, W))
+        pred1_full = np.zeros((H, W))
+        pred2_full = np.zeros((H, W))
+
+        for i in range(len(y_true)):
+            for j in range(len(y_true[i])):
+                if indices[i][j] != idx:
+                    continue
+                x, y = coords[i][j]
+                
+                # Mask from y_true
+                true_full[x:x + tile_size, y:y + tile_size] = y_true[i][j]
+                
+                # Fill the first predicted full image
+                pred1_full[x:x + tile_size, y:y + tile_size] = y_pred[i][j]
+                
+                # Center for the second predicted full image
+                pred2_full[x:x + half_ts, y:y + half_ts] = y_pred[i][j][quat_ts:-quat_ts, quat_ts:-quat_ts]
+
+        pred1_full[quat_ts:-quat_ts, quat_ts:-quat_ts] = pred2_full[quat_ts:-quat_ts, quat_ts:-quat_ts]
+        masks.append((true_full.copy(), pred1_full.copy()))
+    
+    return masks
+
+
+def calculate_metrics(y_true, y_pred, coords, indices, tile_size, osm_path) -> Dict[str, float]:
+    masks = make_full_masks(y_true, y_pred, coords, indices, tile_size)
+    metrics = get_score(masks, osm_path)
+
+    y_true = np.concatenate([mask[0].flatten() for mask in masks])
+    y_pred = np.concatenate([mask[1].flatten() for mask in masks])
+
     # Calculate intersection and union
     intersection = np.sum((y_true == 1) & (y_pred == 1))
     union = np.sum((y_true == 1) | (y_pred == 1))
@@ -32,7 +83,7 @@ def calculate_metrics(y_true, y_pred) -> Dict[str, float]:
     iou = (intersection + epsilon) / (union + epsilon)
     f1 = f1_score(y_true, y_pred, average='macro')
 
-    return {'f1': f1, 'iou': iou}
+    return {**metrics, 'f1': f1, 'iou': iou}
 
 
 def dir_checker(output_dir: str, config_path: str) -> str:

@@ -23,7 +23,9 @@ logger: logging.Logger = logging.getLogger()  # The logger used to log output
 
 def normalize(band):
     band_min, band_max = (band.min(), band.max())
-    return ((band - band_min) / ((band_max - band_min)))
+    if band_max == band_min:
+        return np.zeros(band.shape)
+    return (band - band_min) / (band_max - band_min)
 
 
 transform = A.Compose([
@@ -82,6 +84,8 @@ class CoverDataset(Dataset):
         return dict(
             image=image,
             mask=mask,
+            coords=self.coords[index],
+            image_index=self.image_indices[index]
         )
 
     def _load_data(self) -> None:
@@ -95,7 +99,8 @@ class CoverDataset(Dataset):
             
         if self.worldfloods_cnt > 0 and self.data_split == "train":
             if self.worldfloods_files is None:
-                self.worldfloods_files = random.sample(os.listdir(os.path.join(self.worldfloods_folder, "train", "S2")),
+                random.seed(42)
+                self.worldfloods_files = random.sample(os.listdir(os.path.join(self.worldfloods_folder, "test", "S2")),
                                                        self.worldfloods_cnt)
             file_names += self.worldfloods_files
         
@@ -104,7 +109,7 @@ class CoverDataset(Dataset):
         for file_name in tqdm(file_names):
             
             if not file_name[0].isdigit():
-                image, mask = load_from_folder(self.worldfloods_folder, self.data_split, file_name)
+                image, mask = load_from_folder(self.worldfloods_folder, 'test', file_name)
                 for i in range(image.shape[0]):
                     image[i] = normalize(image[i])
                 pictures_and_masks.append((image.astype(np.float32), mask.astype(np.float32)))
@@ -116,49 +121,76 @@ class CoverDataset(Dataset):
                 picture = []
                 for i in range(self.channels):
                     chan = normalize(fin.read(i + 1))
-                    if self.data_split == "train" and file_name[0] == '6':
+                    if self.data_split == "train" and file_name[0] == '6_1':
                         chan = chan[:, :8000]
-                    elif self.data_split == "val" and file_name[0] == '6':
+                    elif self.data_split == "val" and file_name[0] == '6_1':
                         chan = chan[:, 8000:]
+                    if self.data_split == "train" and file_name[0] == '6_2':
+                        chan = chan[:, :5000]
+                    elif self.data_split == "val" and file_name[0] == '6_2':
+                        chan = chan[:, 5000:]
                     picture.append(chan)
                 picture = np.stack(picture)
             with rasterio.open(mask_path) as fin:
                 mask = fin.read(1)
-                if self.data_split == "train" and file_name[0] == '6':
+                if self.data_split == "train" and file_name[0] == '6_1':
                     mask = mask[:, :8000]
-                elif self.data_split == "val" and file_name[0] == '6':
+                elif self.data_split == "val" and file_name[0] == '6_1':
                     mask = mask[:, 8000:]
+                if self.data_split == "train" and file_name[0] == '6_2':
+                    mask = mask[:, :5000]
+                elif self.data_split == "val" and file_name[0] == '6_2':
+                    mask = mask[:, 5000:]
                 mask = np.expand_dims(mask, axis=0)
             pictures_and_masks.append((picture.astype(np.float32), mask.astype(np.float32)))
         
         logger.info(f'dividing into tiles ...')
         self.images = []
         self.masks = []
+        self.coords = []
+        self.image_indices = []
+
         tile_size = self.tile_size
+        padding_size = tile_size // 2
         
         total_worldfloods_tiles = 0
-        for image, mask in tqdm(pictures_and_masks):
+        total_baseline_tiles = 0
+        for image_idx, (image, mask) in enumerate(tqdm(pictures_and_masks)):
             assert image.shape[1:] == mask.shape[1:], (image.shape, mask.shape)
             ch, h, w = image.shape
+            h_plus = -1
+            w_plus = -1
+            if self.data_split == "val":
+                if h % padding_size != 0:
+                    h_plus = 0
+                if w % padding_size != 0:
+                    w_plus = 0
 
-            for h_coord in range(0, h // tile_size):
-                for w_coord in range(0, w // tile_size):
-                    y = h_coord * tile_size
-                    x = w_coord * tile_size
+            for h_coord in range(0, h // padding_size + h_plus):
+                for w_coord in range(0, w // padding_size + w_plus):
+                    i = h_coord * padding_size
+                    j = w_coord * padding_size
+                    i = min(i, h - tile_size)
+                    j = min(j, w - tile_size)
                     
-                    tile_mask = mask[:, y: y + tile_size, x: x + tile_size]
-                    tile_image = image[:, y: y + tile_size, x: x + tile_size]
+                    tile_mask = mask[:, i: i + tile_size, j: j + tile_size]
+                    tile_image = image[:, i: i + tile_size, j: j + tile_size]
                     if ch > 11:
                         # Image from worldfloods
                         if not is_tile_valid(tile_mask):
                             continue
                         tile_image, tile_mask = from_worldfloods(tile_image, tile_mask)
                         total_worldfloods_tiles += 1
+                    else:
+                        total_baseline_tiles += 1
                     
                     self.images.append(tile_image)
                     self.masks.append(tile_mask)
+                    self.coords.append((i, j))
+                    self.image_indices.append(image_idx)
         
-        logger.info(f'Worldfloods tiles: {total_worldfloods_tiles}')
+        logger.info(f'Baseline tiles for {self.data_split}: {total_baseline_tiles}')
+        logger.info(f'Worldfloods tiles for {self.data_split}: {total_worldfloods_tiles}')
 
 
 def get_dataloader(config: Dict, data_split: str, batch_size: int) -> DataLoader:

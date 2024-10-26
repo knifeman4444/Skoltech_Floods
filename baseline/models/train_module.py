@@ -46,6 +46,7 @@ class TrainModule:
             activation='sigmoid'
         )
         self.model.to(self.config["device"])
+        #self.model = nn.DataParallel(self.model).to(self.config["device"])
         self.postfix: Postfix = {}
 
         def my_dice_loss(p, y):
@@ -60,9 +61,12 @@ class TrainModule:
         self.config["train"]["dataset_path"] = os.path.join(self.config["root_path"], self.config["train"]["dataset_path"])
         self.config["val"]["dataset_path"] = os.path.join(self.config["root_path"], self.config["val"]["dataset_path"])
         self.config["test"]["dataset_path"] = os.path.join(self.config["root_path"], self.config["test"]["dataset_path"])
+        self.config['val']['osm_path'] = os.path.join(self.config["root_path"], self.config['val']['osm_path'])
+        self.config['worldfloods_folder'] = os.path.join(self.config["root_path"], self.config['worldfloods_folder'])
 
         # Load the model
         if self.config["train"]["model_ckpt"] is not None:
+            self.config["train"]["model_ckpt"] = os.path.join(self.config["root_path"], self.config["train"]["model_ckpt"])
             self.model.load_state_dict(torch.load(self.config["train"]["model_ckpt"]), strict=False)
             logger.info(f'Model loaded from checkpoint: {self.config["train"]["model_ckpt"]}')
 
@@ -103,7 +107,7 @@ class TrainModule:
             if self.state == "interrupted":
                 self.validation_procedure()
                 self.pbar.set_postfix(
-                    {k: self.postfix[k] for k in self.postfix.keys() & {"train_loss_step", "f1", "iou"}}
+                    {k: self.postfix[k] for k in self.postfix.keys() & {"train_loss_step", "total_f1", "f1_water", "avg_f1_business", "pre_f1", "post_f1", "f1", "iou"}}
                 )
 
         self.state = "finished"
@@ -140,7 +144,7 @@ class TrainModule:
             self.postfix["train_loss_step"] = float(f"{train_step:.3f}")
             train_loss_list.append(train_step)
             self.pbar.set_postfix(
-                {k: self.postfix[k] for k in self.postfix.keys() & {"train_loss_step", "f1", "iou"}}
+                {k: self.postfix[k] for k in self.postfix.keys() & {"train_loss_step", "total_f1", "f1_water", "avg_f1_business", "pre_f1", "post_f1", "f1", "iou"}}
             )
             if step % self.config["train"]["log_steps"] == 0:
                 save_logs(
@@ -158,7 +162,7 @@ class TrainModule:
         self.postfix["train_loss"] = train_loss.mean().item()
         self.validation_procedure()
         self.overfit_check()
-        self.pbar.set_postfix({k: self.postfix[k] for k in self.postfix.keys() & {"train_loss_step", "f1", "iou"}})
+        self.pbar.set_postfix({k: self.postfix[k] for k in self.postfix.keys() & {"train_loss_step", "total_f1", "f1_water", "avg_f1_business", "pre_f1", "post_f1", "f1", "iou"}})
 
     def training_step(self, batch: BatchDict) -> Dict[str, float]:
         preds = self.model.forward(batch["image"].to(self.config["device"]))
@@ -174,14 +178,18 @@ class TrainModule:
         self.model.eval()
         all_preds = []
         all_labels = []
+        all_coords = []
+        all_indices = []
         for batch in tqdm(self.v_loader, disable=(not self.config["progress_bar"]), position=1, leave=False):
             preds = self.validation_step(batch)
             preds = (preds > 0.5).astype(float)
             all_preds.append(preds)
-            all_labels.append(batch["mask"].numpy())
-        all_preds = np.concatenate([array.flatten() for array in all_preds])
-        all_labels = np.concatenate([array.flatten() for array in all_labels])
-        metrics = calculate_metrics(all_preds, all_labels)
+            all_labels.append(batch["mask"].numpy().squeeze())
+            all_coords.append(np.array(list(zip(batch["coords"][0], batch["coords"][1]))))
+            all_indices.append(batch["image_index"].numpy())
+        metrics = calculate_metrics(all_labels, all_preds, all_coords, all_indices,
+                                    self.config['train_params']['tile_size'], self.config['val']['osm_path'])
+
         for key, value in metrics.items():
             self.postfix[key] = value
 
@@ -202,7 +210,7 @@ class TrainModule:
 
     def validation_step(self, batch: BatchDict):
         preds = self.model.forward(batch["image"].to(self.config["device"]))
-        return preds.detach().cpu().numpy()
+        return preds.detach().cpu().numpy().squeeze()
 
     def test_procedure(self) -> None:
         #TODO
@@ -224,7 +232,7 @@ class TrainModule:
         save_test_predictions(predictions, output_dir=self.config["test"]["output_dir"])
     
     def overfit_check(self) -> None:
-        validation_metric_name = 'f1'
+        validation_metric_name = 'total_f1'
         if self.early_stop(self.postfix[validation_metric_name]):
             logger.info(f"\nValidation not improved for {self.early_stop.patience} consecutive epochs. Stopping...")
             self.state = "early_stopped"

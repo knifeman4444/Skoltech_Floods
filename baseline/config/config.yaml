@@ -1,4 +1,6 @@
-root_path: "your_root_path"
+root_path: "path_to_root"
+worldfloods_folder: "dataset/WorldFloodsv2"
+worldfloods_cnt: 0
 save_model_path: "models"
 debug: True
 progress_bar: True
@@ -8,7 +10,7 @@ wandb_log: False
 
 train:
   #mixed_precision?
-  dataset_path: "train"
+  dataset_path: "dataset/train"
   model_ckpt: null
   num_workers: 0
   shuffle: True
@@ -26,11 +28,12 @@ train_model:
 train_params:
   batch_size: 64
   learning_rate: 0.0001
-  tile_size: 256
+  tile_size: 256  # Needs to be divisible by 4
   #TODO lr scheduler
 
 val:
-  dataset_path: "train"
+  dataset_path: "dataset/train"
+  osm_path: "dataset/train/osm/9.geojson"
   save_val_outputs: True
   batch_size: 64
   num_workers: 0
@@ -40,7 +43,7 @@ val:
 
 #TODO
 test:
-  dataset_path: "train"
+  dataset_path: "dataset/train"
   save_test_outputs: True
   model_ckpt: null
   batch_size: 64

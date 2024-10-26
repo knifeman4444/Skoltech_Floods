@@ -7,4 +7,3 @@ with open('wandb_token.txt', 'r') as f:
     wandb_token = f.read().strip()
 trainer = TrainModule(config, wandb_token, config_path="./config/config.yaml")
 trainer.pipeline()
-#trainer.test()

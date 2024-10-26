@@ -15,14 +15,10 @@ from models.data_loader import get_dataloader
 from models.data_model import Postfix
 from calculate_metrics import get_score
 import matplotlib.pyplot as plt
+from tqdm import tqdm
+import rasterio
 
 from sklearn.metrics import f1_score
-
-
-def reduce_func(D_chunk, start):
-    top_size = 100
-    nearest_items = np.argsort(D_chunk, axis=1)[:, :top_size + 1]
-    return [(i, items[items!=i]) for i, items in enumerate(nearest_items, start)]
 
 
 def make_full_masks(y_true, y_pred, coords, indices, tile_size) -> List[Tuple[np.ndarray, np.ndarray]]:
@@ -41,20 +37,21 @@ def make_full_masks(y_true, y_pred, coords, indices, tile_size) -> List[Tuple[np
     half_ts = tile_size // 2
     quat_ts = tile_size // 4
     masks = []
-    for idx in range(num_img):
+    for idx in tqdm(range(num_img)):
         H, W = img_sizes[idx]
         true_full = np.zeros((H, W))
         pred1_full = np.zeros((H, W))
         pred2_full = np.zeros((H, W))
 
-        for i in range(len(y_true)):
-            for j in range(len(y_true[i])):
+        for i in range(len(y_pred)):
+            for j in range(len(y_pred[i])):
                 if indices[i][j] != idx:
                     continue
                 x, y = coords[i][j]
                 
                 # Mask from y_true
-                true_full[x:x + tile_size, y:y + tile_size] = y_true[i][j]
+                if y_true:
+                    true_full[x:x + tile_size, y:y + tile_size] = y_true[i][j]
                 
                 # Fill the first predicted full image
                 pred1_full[x:x + tile_size, y:y + tile_size] = y_pred[i][j]
@@ -63,7 +60,10 @@ def make_full_masks(y_true, y_pred, coords, indices, tile_size) -> List[Tuple[np
                 pred2_full[x + quat_ts:x + quat_ts + half_ts, y + quat_ts:y + quat_ts + half_ts] = y_pred[i][j][quat_ts:-quat_ts, quat_ts:-quat_ts]
 
         pred1_full[quat_ts:-quat_ts, quat_ts:-quat_ts] = pred2_full[quat_ts:-quat_ts, quat_ts:-quat_ts]
-        masks.append((true_full.copy(), pred1_full.copy()))
+        if y_true:
+            masks.append((true_full.copy(), pred1_full.copy()))
+        else:
+            masks.append(pred1_full.copy())
     
     return masks
 
@@ -104,11 +104,16 @@ def dir_checker(output_dir: str, config_path: str) -> str:
     shutil.copy2(config_path, dst)
     return outdir
 
-def save_test_predictions(predictions: List, output_dir: str) -> None:
-    #TODO
-    with open(os.path.join(output_dir, 'submission.txt'), 'w') as foutput:
-        for query_item, query_nearest in predictions:
-            foutput.write('{}\t{}\n'.format(query_item, '\t'.join(map(str,query_nearest))))
+def save_test_predictions(masks, all_filenames, dataset_path: str, model_name: str) -> None:
+    output_dir = os.path.join(dataset_path, model_name)
+    os.makedirs(output_dir, exist_ok=True)
+    for masks, filename in zip(masks, all_filenames):
+        with rasterio.open(os.path.join(dataset_path, "images", filename)) as multi_band_src:
+            meta = multi_band_src.meta
+        meta['count'] = 1
+        with rasterio.open(os.path.join(output_dir, filename), 'w', **meta) as fout:
+            fout.write(masks, 1)
+    
 
 def save_predictions(masks: List[Tuple[np.ndarray, np.ndarray]], output_dir: str) -> None:
     os.makedirs(output_dir, exist_ok=True)

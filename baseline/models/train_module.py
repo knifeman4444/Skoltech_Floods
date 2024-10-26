@@ -16,7 +16,7 @@ from models.early_stopper import EarlyStopper
 from models.utils import (
     calculate_metrics,
     dir_checker,
-    reduce_func,
+    make_full_masks,
     save_best_log,
     save_logs,
     save_predictions,
@@ -56,8 +56,8 @@ class TrainModule:
         self.config_path = config_path
 
         self.model = load_model(config)
-        self.model.to(self.config["device"])
-        #self.model = nn.DataParallel(self.model).to(self.config["device"])
+        #self.model.to(self.config["device"])
+        self.model = nn.DataParallel(self.model).to(self.config["device"])
         self.postfix: Postfix = {}
 
         def my_dice_loss(p, y):
@@ -80,6 +80,9 @@ class TrainModule:
             self.config["train"]["model_ckpt"] = os.path.join(self.config["root_path"], self.config["train"]["model_ckpt"])
             self.model.load_state_dict(torch.load(self.config["train"]["model_ckpt"]), strict=False)
             logger.info(f'Model loaded from checkpoint: {self.config["train"]["model_ckpt"]}')
+        
+        if self.config["test"]["model_ckpt"] is not None:
+            self.config["test"]["model_ckpt"] = os.path.join(self.config["root_path"], self.config["test"]["model_ckpt"])
 
     def pipeline(self) -> None:
         # Create new folder and init wandb
@@ -124,8 +127,7 @@ class TrainModule:
         self.state = "finished"
 
     def test(self) -> None:
-        #TODO
-        #self.test_loader = dataloader_factory(config=self.config, data_split="test")
+        self.test_loader = get_dataloader(config=self.config, data_split="test", batch_size=self.config["test"]["batch_size"])
         self.test_results: TestResults = {}
 
         if self.best_model_path is not None:
@@ -218,28 +220,36 @@ class TrainModule:
             visualize_model_predictions(self.model, self.config)
         self.model.train()
 
-    def validation_step(self, batch: BatchDict):
+    def validation_step(self, batch):
         preds = self.model.forward(batch["image"].to(self.config["device"]))
         return preds.detach().cpu().numpy().squeeze()
 
     def test_procedure(self) -> None:
-        #TODO
         self.model.eval()
-        embeddings: Dict[str, torch.Tensor] = {}
-        trackids: List[int] = []
-        embeddings: List[np.array] = []
-        for batch in tqdm(self.test_loader, disable=(not self.config["progress_bar"])):
-            test_dict = self.validation_step(batch)
-            if test_dict["f_c"].ndim == 1:
-                test_dict["f_c"] = test_dict["f_c"].unsqueeze(0)
-            for anchor_id, embedding in zip(test_dict["anchor_id"], test_dict["f_c"]):
-                trackids.append(anchor_id)
-                embeddings.append(embedding.numpy())
-        predictions = []
-        for chunk_result in pairwise_distances_chunked(embeddings, metric='cosine', reduce_func=reduce_func, working_memory=100):
-            for query_indx, query_nearest_items in chunk_result:
-                predictions.append((trackids[query_indx], [trackids[nn_indx] for nn_indx in query_nearest_items]))
-        save_test_predictions(predictions, output_dir=self.config["test"]["output_dir"])
+        all_preds = []
+        all_coords = []
+        all_indices = []
+        filenames_set = set()
+        all_filenames = []
+        for batch in tqdm(self.test_loader, disable=(not self.config["progress_bar"]), position=1, leave=False):
+            preds = self.validation_step(batch)
+            preds = (preds > 0.5).astype(float)
+            all_preds.append(preds)
+            all_coords.append(np.array(list(zip(batch["coords"][0], batch["coords"][1]))))
+            all_indices.append(batch["image_index"].numpy())
+            for filename in batch["test_file_path"]:
+                if filename not in filenames_set:
+                    all_filenames.append(filename)
+                    filenames_set.add(filename)
+        masks = make_full_masks(None, all_preds, all_coords, all_indices,
+                                self.config['train_params']['tile_size'])
+
+        logger.info(f"Test with model {self.config['test']['model_name']} completed!")
+
+        save_test_predictions(masks, all_filenames, dataset_path=self.config["test"]["dataset_path"],
+                                                    model_name="preds_" + self.config["test"]["model_name"])
+        #visualize_model_predictions(self.model, self.config)
+        self.model.train()
     
     def overfit_check(self) -> None:
         validation_metric_name = 'total_f1'

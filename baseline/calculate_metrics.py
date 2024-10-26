@@ -81,6 +81,7 @@ def get_score(masks, osm_path):
     assert masks[-1][1].shape == (512, 512), "last image should be 9_2"
     assert masks[-2][0].shape == (512, 512), "the penultimate one should be 9_1"
     assert masks[-2][1].shape == (512, 512), "the penultimate one should be 9_1"
+    assert masks[-2][0].sum() < masks[-1][0].sum(), "the right order"
 
     f1_water = calculate_f1_score(masks)
 

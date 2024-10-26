@@ -46,12 +46,14 @@ class CoverDataset(Dataset):
         self,
         data_path: str,
         data_split: Literal["train", "val"],
-        tile_size: int = 256
+        tile_size: int = 256,
+        channels: int = 10,
     ) -> None:
         super().__init__()
         self.data_path = data_path
         self.data_split = data_split
         self.tile_size = tile_size
+        self.channels = channels
         self._load_data()
 
     def __len__(self) -> int:
@@ -85,7 +87,7 @@ class CoverDataset(Dataset):
             mask_path = os.path.join(self.data_path, 'masks', file_name + '.tif')
             with rasterio.open(image_path) as fin:
                 picture = []
-                for i in range(10):
+                for i in range(self.channels):
                     chan = normalize(fin.read(i + 1))
                     if self.data_split == "train" and file_name[0] == '6':
                         chan = chan[:, :8000]

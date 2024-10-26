@@ -13,7 +13,7 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2
 from tqdm import tqdm
 from models.dataset_converter import is_tile_valid, load_from_folder, from_worldfloods
-from models.load_elevations import load_and_add_osm_data
+from models.load_elevations import load_and_add_osm_data, load_and_add_elevation_data
 
 from models.data_model import BatchDict
 from utils import bcolors
@@ -55,6 +55,7 @@ class SegmentationDataset(Dataset):
         worldfloods_folder: str = "",
         worldfloods_files: List[str] = None,
         include_osm: bool = False,
+        include_elevation: bool = False,
     ) -> None:
         super().__init__()
         self.data_path = data_path
@@ -65,6 +66,9 @@ class SegmentationDataset(Dataset):
         self.worldfloods_folder = worldfloods_folder
         self.worldfloods_files = worldfloods_files
         self.include_osm = include_osm
+        self.include_elevation = include_elevation
+        if include_elevation and include_osm:
+            raise ValueError("Cant add both osm and elevation yet")
         
         if worldfloods_cnt > 0 and not os.path.exists(worldfloods_folder):
             raise FileNotFoundError(f"Folder {worldfloods_folder} does not exist")
@@ -111,7 +115,9 @@ class SegmentationDataset(Dataset):
         for file_name in tqdm(file_names):
             
             if not file_name[0].isdigit():
-                image, mask = load_from_folder(self.worldfloods_folder, self.data_split, file_name, osm=self.include_osm)
+                image, mask = load_from_folder(self.worldfloods_folder, self.data_split, file_name, osm=self.include_osm,
+                                               elevation=self.include_elevation)
+                print(image.shape)
                 image = normalize(image.astype(np.float32))
                 pictures_and_masks.append((image.astype(np.float32), mask.astype(np.float32)))
                 continue
@@ -119,7 +125,14 @@ class SegmentationDataset(Dataset):
             image_path = os.path.join(self.data_path, 'images', file_name + '.tif')
             mask_path = os.path.join(self.data_path, 'masks', file_name + '.tif')
             with rasterio.open(image_path) as fin:
-                picture = fin.read() if not self.include_osm else load_and_add_osm_data(image_path)
+                picture = None
+                if self.include_elevation:
+                    picture = load_and_add_elevation_data(image_path)
+                    print(picture.shape)
+                elif self.include_osm:
+                    picture = load_and_add_osm_data(image_path)
+                else:
+                    picture = fin.read()
                 picture = normalize(picture.astype(np.float32))
                 if self.data_split == "train" and file_name == '6_1':
                     picture = picture[:, :, :8000]
@@ -181,7 +194,8 @@ class SegmentationDataset(Dataset):
                         # Image from worldfloods
                         if not is_tile_valid(tile_mask):
                             continue
-                        tile_image, tile_mask = from_worldfloods(tile_image, tile_mask)
+                        tile_image, tile_mask = from_worldfloods(tile_image, tile_mask,
+                                                                 elevation=self.include_osm or self.include_elevation)
                         total_worldfloods_tiles += 1
                     else:
                         total_baseline_tiles += 1
@@ -202,7 +216,8 @@ def get_dataloader(config: Dict, data_split: str, batch_size: int) -> DataLoader
             config["train_params"]['tile_size'],
             worldfloods_cnt=config.get("worldfloods_cnt", 0),
             worldfloods_folder=config.get("worldfloods_folder", ""),
-            include_osm=config.get("include_osm", False)
+            include_osm=config.get("include_osm", False),
+            include_elevation=config.get("include_elevation", False)
             ),
         batch_size=batch_size,
         num_workers=config[data_split]["num_workers"],

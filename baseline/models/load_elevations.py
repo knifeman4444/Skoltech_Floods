@@ -63,8 +63,6 @@ def load_and_add_elevation_data(reference_image_path: str) -> np.ndarray:
         with rasterio.open(f'/tmp/.elevation{seed}.tif') as src:
             return src.read()
         
-        # Remove temporary file
-        os.remove(f'/tmp/.elevation{seed}.tif')
         
 def load_and_add_osm_data(reference_image_path: str) -> np.ndarray:
     """

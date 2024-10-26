@@ -37,16 +37,14 @@ def is_tile_valid(mask: np.ndarray) -> bool:
     Checks that there are not too many clouds, not too much invalid data
     """
     
-    max_clouds = 0.1
-    max_invalid = 0.1
+    max_clouds = 0.2
+    max_invalid = 0.2
     n_pixels = mask.size
     n_clouds = np.sum(mask == 3)
     n_invalid = np.sum(mask == 0)
     n_water = np.sum(mask == 2)
     
-    return n_clouds / n_pixels < max_clouds and n_invalid / n_pixels < max_invalid and (
-        n_water / n_pixels >= 0.05 and n_water / n_pixels <= 0.95
-    )
+    return n_clouds / n_pixels < max_clouds and n_invalid / n_pixels < max_invalid and n_water / n_pixels >= 0.01
 
 
 def load_from_folder(folder: str, split="test", filename=None, elevation=False, osm=False) -> Tuple[np.ndarray, np.ndarray]:
@@ -74,8 +72,7 @@ def load_from_folder(folder: str, split="test", filename=None, elevation=False, 
     if osm:
         image = load_and_add_osm_data(os.path.join(folder_S2, filename))
     else:
-        # image = load_and_add_elevation_data(os.path.join(folder_S2, filename))
-        raise NotImplementedError("Elevation data is not supported yet")
+        image = load_and_add_elevation_data(os.path.join(folder_S2, filename))
     mask = rasterio.open(os.path.join(folder_gt, filename)).read()[1][np.newaxis, :, :]
     
     return image, mask

@@ -116,10 +116,10 @@ class SegmentationDataset(Dataset):
             file_names = ['6_1', '6_2', '9_1', '9_2']
         elif self.data_split == "test":
             dir_path = os.path.join(self.data_path, 'images')
-            file_names = os.listdir(dir_path)
+            file_names = filter(lambda x: x.endswith('.tif') and not x.startswith('dwm_'), os.listdir(dir_path))
             for f in file_names:
                 assert f.endswith('.tif')
-            file_names = sorted(file_names)
+            file_names = list(sorted(file_names))
             
         if self.worldfloods_cnt > 0 and self.data_split == "train":
             if self.worldfloods_files is None:

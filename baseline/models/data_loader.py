@@ -135,11 +135,14 @@ class SegmentationDataset(Dataset):
             if self.data_split == "test":
                 image_path = os.path.join(self.data_path, 'images', file_name)
                 with rasterio.open(image_path) as fin:
-                    picture = []
-                    for i in range(self.channels):
-                        chan = normalize(fin.read(i + 1))
-                        picture.append(chan)
-                    picture = np.stack(picture)
+                    if self.include_elevation:
+                        picture = load_and_add_elevation_data(image_path)
+                        print(picture.shape)
+                    elif self.include_osm:
+                        picture = load_and_add_osm_data(image_path)
+                    else:
+                        picture = fin.read()
+                    picture = normalize(picture.astype(np.float32))
                 pictures_and_masks.append((picture, None))
                 continue
             
@@ -231,8 +234,8 @@ class SegmentationDataset(Dataset):
                         tile_mask = mask[:, i: i + tile_size, j: j + tile_size]
                     tile_image = image[:, i: i + tile_size, j: j + tile_size]
 
-                    if self.data_split == "train" and mask.sum() < 0.05 * mask.shape[0] * mask.shape[1]:
-                        continue
+                    # if self.data_split == "train" and mask.sum() < 0.05 * mask.shape[0] * mask.shape[1]:
+                    #     continue
 
                     if ch > self.channels:
                         # Image from worldfloods

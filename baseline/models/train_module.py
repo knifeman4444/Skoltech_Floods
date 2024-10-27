@@ -42,6 +42,14 @@ def load_model(config):
         )
     elif config["train_model"]['model'] == "CustomVIT":
         return models.custom_models.CustomVIT(config=config)
+    elif config["train_model"]['model'] == "PAN":
+        return smp.PAN(
+            encoder_name=config["train_model"]["backbone"],
+            encoder_weights=config["train_model"]["pretrain"],
+            in_channels=config["train_model"]["num_channels"],
+            classes=1,
+            activation='sigmoid'
+        )
     else:
         raise RuntimeError(f"model {config['train_model']['model']} in config does not exist")
 

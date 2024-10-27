@@ -142,6 +142,11 @@ class SegmentationDataset(Dataset):
                         picture = load_and_add_osm_data(image_path)
                     else:
                         picture = fin.read()
+
+                    if self.include_dwm:
+                        dwm_path = os.path.join(self.data_path, 'images', "dwm_" + file_name + '.png')
+                        dwm_image = cv2.imread(dwm_path, cv2.IMREAD_GRAYSCALE)
+                        picture = np.concatenate([picture, np.expand_dims(dwm_image, axis=0)], axis=0)
                     picture = normalize(picture.astype(np.float32))
                 pictures_and_masks.append((picture, None))
                 continue

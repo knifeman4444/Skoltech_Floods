@@ -6,8 +6,8 @@ config = load_config(config_path="./config/local_config.yaml")
 initialize_logging(config_path="./config/logging_config.yaml", debug=False)
 
 models_paths_and_names = [
-    ("baseline/outputs_val/run-1/model/best-model-epoch=21.pt", "-"),
-    ("baseline/outputs_val/run-1/model/best-model-epoch=21.pt", "-")
+    ("../baseline/outputs_val/run-50/model/best-model-epoch=14.pt", "PAN"),
+    # ("./outputs_val/run-1/model/best-model-epoch=21.pt", "-")
 ]
 
 if len(models_paths_and_names) == 0:

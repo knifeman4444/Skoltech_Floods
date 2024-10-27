@@ -1,6 +1,8 @@
 root_path: "path_to_root"
 worldfloods_folder: "dataset/WorldFloodsv2"
 worldfloods_cnt: 0
+include_osm: False
+include_elevation: False
 save_model_path: "models"
 debug: True
 progress_bar: True
@@ -9,7 +11,6 @@ exp_short_description: "baseline"
 wandb_log: False
 
 train:
-  #mixed_precision?
   dataset_path: "dataset/train"
   model_ckpt: null
   num_workers: 0
@@ -20,7 +21,6 @@ train:
   patience: 100000
 
 train_model:
-  #dropout: 0.1
   backbone: "timm-efficientnet-b5"
   pretrain: "imagenet"
   num_channels: 10
@@ -29,7 +29,6 @@ train_params:
   batch_size: 64
   learning_rate: 0.0001
   tile_size: 256  # Needs to be divisible by 4
-  #TODO lr scheduler
 
 val:
   dataset_path: "dataset/train"
@@ -41,7 +40,6 @@ val:
   drop_last: False
   output_dir: "outputs_val"
 
-#TODO
 test:
   dataset_path: "dataset/train"
   save_test_outputs: True
@@ -51,3 +49,4 @@ test:
   shuffle: False
   drop_last: False
   output_dir: "outputs_test"
+  

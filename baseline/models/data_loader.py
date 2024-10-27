@@ -23,10 +23,15 @@ logger: logging.Logger = logging.getLogger()  # The logger used to log output
 
 
 def normalize(img):
-    band_min, band_max = (np.min(img, axis=(1, 2)), np.max(img, axis=(1, 2)))
+    # band_min, band_max = (np.min(img, axis=(1, 2)), np.max(img, axis=(1, 2)))
+    # div = band_max - band_min
+    # div[div == 0] = 1 # Avoid division by zero
+    # return (img - band_min[:, None, None]) / div[:, None, None]
+
+    band_min, band_max = (np.min(img, axis=(1, 2)), np.quantile(img, 0.999, axis=(1, 2)))
     div = band_max - band_min
     div[div == 0] = 1 # Avoid division by zero
-    return (img - band_min[:, None, None]) / div[:, None, None]
+    return ((img - band_min[:, None, None]) / div[:, None, None]).clip(0, 1)
 
 
 transform = A.Compose([
@@ -86,7 +91,7 @@ class SegmentationDataset(Dataset):
         if self.data_split == "train":
             image, mask = augmentations(image, mask)
         image = torch.from_numpy(image.copy()).to(torch.float)
-        if mask:
+        if mask is not None:
             mask = torch.from_numpy(mask.copy()).to(torch.float)
         if self.data_split != "test":
             return dict(
@@ -140,7 +145,7 @@ class SegmentationDataset(Dataset):
                 pictures_and_masks.append((picture, None))
                 continue
             
-            if not file_name[0].isdigit():
+            if file_name.endswith('.tif'):
                 image, mask = load_from_folder(self.worldfloods_folder, self.data_split, file_name, osm=self.include_osm,
                                                elevation=self.include_elevation)
                 image = normalize(image.astype(np.float32))
@@ -193,7 +198,7 @@ class SegmentationDataset(Dataset):
         total_worldfloods_tiles = 0
         total_baseline_tiles = 0
         for image_idx, (image, mask) in enumerate(tqdm(pictures_and_masks)):
-            if mask:
+            if mask is not None:
                 assert image.shape[1:] == mask.shape[1:], (image.shape, mask.shape)
             ch, h, w = image.shape
             h_plus = -1
@@ -211,12 +216,12 @@ class SegmentationDataset(Dataset):
                     i = min(i, h - tile_size)
                     j = min(j, w - tile_size)
                     
-                    if mask:
+                    if mask is not None:
                         tile_mask = mask[:, i: i + tile_size, j: j + tile_size]
                     tile_image = image[:, i: i + tile_size, j: j + tile_size]
 
-                    # if self.data_split == "train" and mask.sum() < 0.05 * mask.shape[0] * mask.shape[1]:
-                    #     continue
+                    if self.data_split == "train" and mask.sum() < 0.05 * mask.shape[0] * mask.shape[1]:
+                        continue
 
                     if ch > 11:
                         # Image from worldfloods
@@ -229,7 +234,7 @@ class SegmentationDataset(Dataset):
                         total_baseline_tiles += 1
                     
                     self.images.append(tile_image)
-                    if mask:
+                    if mask is not None:
                         self.masks.append(tile_mask)
                     else:
                         self.masks.append(None)

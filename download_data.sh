@@ -10,8 +10,8 @@ fi
 
 if [ -z "$(ls -A dataset/test)" ]; then
     cd dataset
-    wget https://lodmedia.hb.bizmrg.com/case_files/1166565/test_dataset_skoltech_test.zip
-    unzip test_dataset_skoltech_test.zip
+    wget https://lodmedia.hb.bizmrg.com/case_files/1166565/test_dataset_test_scoltech.zip
+    unzip test_dataset_test_scoltech.zip
     rm test_dataset_skoltech_test.zip
     cd ..
 fi

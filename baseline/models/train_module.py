@@ -217,7 +217,7 @@ class TrainModule:
         if self.config["val"]["save_val_outputs"]:
             save_predictions(masks, output_dir=self.config["val"]["output_dir"])
             save_logs(self.postfix, output_dir=self.config["val"]["output_dir"])
-            visualize_model_predictions(self.model, self.config)
+            # visualize_model_predictions(self.model, self.config)
         self.model.train()
 
     def validation_step(self, batch):

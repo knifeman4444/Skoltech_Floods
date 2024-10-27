@@ -144,7 +144,8 @@ def visualize_model_predictions_for_image(model, config, image_name):
 
 
 def visualize_model_predictions(model, config):
-    model.eval()
-    with torch.no_grad():
-        visualize_model_predictions_for_image(model, config, '9_1')
-        visualize_model_predictions_for_image(model, config, '9_2')
+    # model.eval()
+    # with torch.no_grad():
+    #     visualize_model_predictions_for_image(model, config, '9_1')
+    #     visualize_model_predictions_for_image(model, config, '9_2')
+    pass

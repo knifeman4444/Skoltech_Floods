@@ -2,6 +2,8 @@ import os
 import logging
 from typing import Dict, Literal, Tuple, List
 from time import time
+
+import cv2
 import numpy as np
 import pandas as pd
 import torch
@@ -23,16 +25,10 @@ logger: logging.Logger = logging.getLogger()  # The logger used to log output
 
 
 def normalize(img):
-    # band_min, band_max = (np.min(img, axis=(1, 2)), np.max(img, axis=(1, 2)))
-    # div = band_max - band_min
-    # div[div == 0] = 1 # Avoid division by zero
-    # return (img - band_min[:, None, None]) / div[:, None, None]
-
     band_min, band_max = (np.min(img, axis=(1, 2)), np.quantile(img, 0.999, axis=(1, 2)))
     div = band_max - band_min
     div[div == 0] = 1 # Avoid division by zero
     return ((img - band_min[:, None, None]) / div[:, None, None]).clip(0, 1)
-
 
 transform = A.Compose([
     A.HorizontalFlip(p=0.5),  # Горизонтальный поворот
@@ -61,6 +57,7 @@ class SegmentationDataset(Dataset):
         worldfloods_files: List[str] = None,
         include_osm: bool = False,
         include_elevation: bool = False,
+        include_dwm: bool = False,
     ) -> None:
         super().__init__()
         self.data_path = data_path
@@ -72,6 +69,7 @@ class SegmentationDataset(Dataset):
         self.worldfloods_files = worldfloods_files
         self.include_osm = include_osm
         self.include_elevation = include_elevation
+        self.include_dwm = include_dwm
         if include_elevation and include_osm:
             raise ValueError("Cant add both osm and elevation yet")
         
@@ -183,6 +181,19 @@ class SegmentationDataset(Dataset):
                 elif self.data_split == "val" and file_name == '6_2':
                     mask = mask[:, 5000:]
                 mask = np.expand_dims(mask, axis=0)
+            if self.channels >= 12:
+                dwm_path = os.path.join(self.data_path, 'images', "dwm_" + file_name + '.png')
+                dwm_image = cv2.imread(dwm_path, cv2.IMREAD_GRAYSCALE)
+
+                if self.data_split == "train" and file_name == '6_1':
+                    dwm_image = dwm_image[:, :8000]
+                elif self.data_split == "val" and file_name == '6_1':
+                    dwm_image = dwm_image[:, 8000:]
+                if self.data_split == "train" and file_name == '6_2':
+                    dwm_image = dwm_image[:, :5000]
+                elif self.data_split == "val" and file_name == '6_2':
+                    dwm_image = dwm_image[:, 5000:]
+                picture = np.concatenate([picture, np.expand_dims(dwm_image, axis=0)], axis=0)
             pictures_and_masks.append((picture.astype(np.float32), mask.astype(np.float32)))
         
         logger.info(f'dividing into tiles ...')
@@ -223,7 +234,7 @@ class SegmentationDataset(Dataset):
                     if self.data_split == "train" and mask.sum() < 0.05 * mask.shape[0] * mask.shape[1]:
                         continue
 
-                    if ch > 11:
+                    if ch > self.channels:
                         # Image from worldfloods
                         if not is_tile_valid(tile_mask):
                             continue
@@ -252,10 +263,12 @@ def get_dataloader(config: Dict, data_split: str, batch_size: int) -> DataLoader
         SegmentationDataset(
             config[data_split]['dataset_path'], data_split,
             config["train_params"]['tile_size'],
+            channels=config["train_model"]["num_channels"],
             worldfloods_cnt=config.get("worldfloods_cnt", 0),
             worldfloods_folder=config.get("worldfloods_folder", ""),
             include_osm=config.get("include_osm", False),
-            include_elevation=config.get("include_elevation", False)
+            include_elevation=config.get("include_elevation", False),
+            include_dwm=config.get("include_dwm", False)
             ),
         batch_size=batch_size,
         num_workers=config[data_split]["num_workers"],
